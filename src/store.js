@@ -89,6 +89,7 @@ async function init() {
       client_document VARCHAR(80) NOT NULL DEFAULT '',
       client_phone VARCHAR(50) NOT NULL DEFAULT '',
       destination VARCHAR(160) NOT NULL DEFAULT '',
+      delivered_by VARCHAR(160) NOT NULL DEFAULT '',
       notes TEXT NOT NULL DEFAULT '',
       total NUMERIC(14,2) NOT NULL DEFAULT 0,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -111,6 +112,7 @@ async function init() {
     ALTER TABLE remission_items ADD COLUMN IF NOT EXISTS source_date DATE;
     ALTER TABLE remission_items ADD COLUMN IF NOT EXISTS grade_cm VARCHAR(40);
     ALTER TABLE remission_items ADD COLUMN IF NOT EXISTS stems_per_bunch INTEGER;
+    ALTER TABLE remissions ADD COLUMN IF NOT EXISTS delivered_by VARCHAR(160) NOT NULL DEFAULT '';
     CREATE INDEX IF NOT EXISTS idx_remissions_created_at ON remissions(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_remission_items_source ON remission_items(source_date,variety,grade_cm,stems_per_bunch);
   `);
@@ -151,6 +153,7 @@ function mapRemission(row, items = []) {
     clientDocument: row.client_document ?? row.clientDocument,
     clientPhone: row.client_phone ?? row.clientPhone,
     destination: row.destination,
+    deliveredBy: row.delivered_by ?? row.deliveredBy ?? '',
     notes: row.notes,
     total: Number(row.total),
     createdAt: row.created_at ?? row.createdAt,
@@ -266,11 +269,13 @@ function cleanRemissionInput(input) {
   const details = {
     clientName: String(input.clientName || '').trim(),
     clientDocument: String(input.clientDocument || '').trim(),
-    clientPhone: String(input.clientPhone || '').trim(),
-    destination: String(input.destination || '').trim(),
+    clientPhone: '',
+    destination: '',
+    deliveredBy: String(input.deliveredBy || '').trim(),
     notes: String(input.notes || '').trim()
   };
   if (!details.clientName) throw new Error('El nombre del cliente es obligatorio.');
+  if (!details.deliveredBy) throw new Error('El nombre de quien entrega es obligatorio.');
   const items = (Array.isArray(input.items) ? input.items : [])
     .map(row => ({ key: String(row.key || row.id || ''), bunches: Math.max(0, Number.parseInt(row.bunches, 10) || 0), unitPriceBunch: Math.max(0, Number(row.unitPriceBunch) || 0) }))
     .filter(row => row.key && row.bunches > 0);
@@ -358,9 +363,9 @@ async function createRemission(input) {
     }));
     const total = detailRows.reduce((sum, row) => sum + row.subtotal, 0);
     const remissionResult = await client.query(
-      `INSERT INTO remissions (id,remission_number,client_name,client_document,client_phone,destination,notes,total)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-      [id, remissionNumber, details.clientName, details.clientDocument, details.clientPhone, details.destination, details.notes, total]
+      `INSERT INTO remissions (id,remission_number,client_name,client_document,client_phone,destination,delivered_by,notes,total)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      [id, remissionNumber, details.clientName, details.clientDocument, details.clientPhone, details.destination, details.deliveredBy, details.notes, total]
     );
     for (const row of detailRows) {
       await client.query(

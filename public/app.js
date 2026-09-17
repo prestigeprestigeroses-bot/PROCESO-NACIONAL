@@ -1,4 +1,4 @@
-const state = { inventory: [], remissions: [], lines: [], config: {}, activeView: 'dashboard' };
+const state = { inventory: [], remissions: [], lines: [], config: {}, totals: {}, activeView: 'dashboard', selectedDate: '' };
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const money = value => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -33,18 +33,24 @@ async function refreshAll() {
   state.inventory = dashboard.inventory;
   state.remissions = dashboard.remissions;
   state.config = config;
+  state.totals = dashboard.totals;
   renderDashboard(dashboard.totals);
   renderInventory();
   renderVarietyOptions();
   renderHistory();
 }
 
-function renderDashboard(totals) {
-  $('#metric-varieties').textContent = number(totals.varieties);
-  $('#metric-bunches').textContent = number(totals.bunches);
-  $('#metric-stems').textContent = number(totals.stems);
+function dateFilteredInventory() {
+  return state.selectedDate ? state.inventory.filter(item => item.date === state.selectedDate) : state.inventory;
+}
+
+function renderDashboard(totals = state.totals) {
+  const visibleInventory = dateFilteredInventory();
+  $('#metric-varieties').textContent = number(new Set(visibleInventory.map(item => item.variety)).size);
+  $('#metric-bunches').textContent = number(visibleInventory.reduce((sum, item) => sum + item.bunches, 0));
+  $('#metric-stems').textContent = number(visibleInventory.reduce((sum, item) => sum + item.stems, 0));
   $('#metric-sales').textContent = money(totals.todaySales);
-  $('#dashboard-inventory').innerHTML = state.inventory.slice(0, 7).map(item => `<tr>
+  $('#dashboard-inventory').innerHTML = visibleInventory.slice(0, 7).map(item => `<tr>
     <td class="date-cell">${inventoryDate(item.date)}</td><td><div class="variety-cell">${escapeHtml(item.variety)}</div></td>
     <td><span class="grade-chip">${escapeHtml(item.gradeCm)}</span></td><td class="quantity">${number(item.stemsPerBunch)}</td>
     <td class="quantity">${number(item.bunches)}</td><td class="quantity">${number(item.stems)}</td>
@@ -56,14 +62,14 @@ function renderDashboard(totals) {
 
 function renderInventory() {
   const query = ($('#inventory-search').value || '').toLowerCase();
-  const rows = state.inventory.filter(item => `${item.date} ${item.variety} ${item.gradeCm}`.toLowerCase().includes(query));
+  const rows = dateFilteredInventory().filter(item => `${item.date} ${item.variety} ${item.gradeCm}`.toLowerCase().includes(query));
   $('#inventory-body').innerHTML = rows.map(item => `<tr>
     <td class="date-cell">${inventoryDate(item.date)}</td><td><div class="variety-cell">${escapeHtml(item.variety)}</div></td>
     <td><span class="grade-chip">${escapeHtml(item.gradeCm)}</span></td><td class="quantity">${number(item.stemsPerBunch)}</td>
     <td class="quantity">${number(item.bunches)}</td><td class="quantity">${number(item.stems)}</td>
   </tr>`).join('');
   $('#inventory-empty').classList.toggle('is-hidden', rows.length > 0);
-  $('#stock-summary').textContent = `${number(state.inventory.reduce((sum, row) => sum + row.bunches, 0))} ramos · ${number(state.inventory.reduce((sum, row) => sum + row.stems, 0))} tallos`;
+  $('#stock-summary').textContent = `${number(rows.reduce((sum, row) => sum + row.bunches, 0))} ramos · ${number(rows.reduce((sum, row) => sum + row.stems, 0))} tallos`;
 }
 
 function renderVarietyOptions() {
@@ -72,8 +78,8 @@ function renderVarietyOptions() {
 
 function renderHistory() {
   const query = ($('#history-search').value || '').toLowerCase();
-  const rows = state.remissions.filter(item => `${item.remissionNumber} ${item.clientName} ${item.destination}`.toLowerCase().includes(query));
-  $('#history-body').innerHTML = rows.map(item => `<tr><td><strong>${escapeHtml(item.remissionNumber)}</strong></td><td>${dateTime(item.createdAt)}</td><td>${escapeHtml(item.clientName)}</td><td>${escapeHtml(item.destination || '—')}</td><td class="money"><strong>${money(item.total)}</strong></td><td><button class="small-button" data-remission-id="${item.id}">Ver / Imprimir</button></td></tr>`).join('');
+  const rows = state.remissions.filter(item => `${item.remissionNumber} ${item.clientName} ${item.deliveredBy}`.toLowerCase().includes(query));
+  $('#history-body').innerHTML = rows.map(item => `<tr><td><strong>${escapeHtml(item.remissionNumber)}</strong></td><td>${dateTime(item.createdAt)}</td><td>${escapeHtml(item.clientName)}</td><td>${escapeHtml(item.deliveredBy || '—')}</td><td class="money"><strong>${money(item.total)}</strong></td><td><button class="small-button" data-remission-id="${item.id}">Ver / Imprimir</button></td></tr>`).join('');
   $('#history-empty').classList.toggle('is-hidden', rows.length > 0);
 }
 
@@ -129,13 +135,15 @@ async function openRemission(id) {
 
 function renderDocument(data) {
   const company = state.config;
-  $('#printable-document').innerHTML = `
+  const documentElement = $('#printable-document');
+  documentElement.dataset.filename = data.remissionNumber;
+  documentElement.innerHTML = `
     <header class="doc-head"><div class="doc-brand"><div class="brand-mark">F</div><div><h2>${escapeHtml(company.companyName)}</h2><p>${escapeHtml(company.companyNit ? `NIT ${company.companyNit}` : 'Salida nacional de flor')}</p><p>${escapeHtml(company.companyAddress)} ${escapeHtml(company.companyPhone)}</p></div></div><div class="doc-number"><span>REMISIÓN</span><strong>${escapeHtml(data.remissionNumber)}</strong><p>${dateTime(data.createdAt)}</p></div></header>
-    <section class="doc-client"><div class="doc-field"><span>Cliente</span><strong>${escapeHtml(data.clientName)}</strong></div><div class="doc-field"><span>NIT / Documento</span><strong>${escapeHtml(data.clientDocument || '—')}</strong></div><div class="doc-field"><span>Destino</span><strong>${escapeHtml(data.destination || '—')}</strong></div><div class="doc-field"><span>Teléfono</span><strong>${escapeHtml(data.clientPhone || '—')}</strong></div></section>
+    <section class="doc-client"><div class="doc-field"><span>Cliente</span><strong>${escapeHtml(data.clientName)}</strong></div><div class="doc-field"><span>NIT / Documento</span><strong>${escapeHtml(data.clientDocument || '—')}</strong></div><div class="doc-field"><span>Entregado por</span><strong>${escapeHtml(data.deliveredBy || '—')}</strong></div></section>
     <table class="doc-table"><thead><tr><th>Fecha</th><th>Variedad</th><th>Grado</th><th>Tallos/ramo</th><th>Ramos</th><th>Total tallos</th><th>Precio ramo</th><th>Subtotal</th></tr></thead><tbody>${data.items.map(item => `<tr><td>${item.sourceDate ? inventoryDate(item.sourceDate) : '—'}</td><td><strong>${escapeHtml(item.variety)}</strong></td><td>${escapeHtml(item.gradeCm || '—')}</td><td>${number(item.stemsPerBunch)}</td><td>${number(item.bunches)}</td><td>${number(item.stems)}</td><td>${money(item.unitPriceBunch)}</td><td>${money(item.subtotal)}</td></tr>`).join('')}</tbody></table>
     <div class="doc-total"><span>TOTAL</span><span>${money(data.total)}</span></div>
     ${data.notes ? `<div class="doc-notes"><strong>Observaciones:</strong> ${escapeHtml(data.notes)}</div>` : ''}
-    <footer class="doc-signatures"><div class="doc-signature">Entregado por</div><div class="doc-signature">Recibido por</div></footer>`;
+    <footer class="doc-approval"><div class="doc-signature-card"><div class="doc-signature-space"></div><strong>Firma de quien recibe</strong><span>Nombre y documento</span></div><div class="doc-stamp"><strong>SELLO DE RECIBIDO</strong><span>Fecha: __________________</span><span>Hora: ___________________</span></div></footer>`;
 }
 
 $('#login-form').addEventListener('submit', async event => {
@@ -154,6 +162,16 @@ $$('[data-go]').forEach(button => button.addEventListener('click', () => switchV
 $('#menu-button').addEventListener('click', () => $('#sidebar').classList.toggle('open'));
 $('#inventory-search').addEventListener('input', renderInventory);
 $('#history-search').addEventListener('input', renderHistory);
+function setDateFilter(value) {
+  state.selectedDate = value;
+  $('#dashboard-date').value = value;
+  $('#inventory-date').value = value;
+  renderDashboard();
+  renderInventory();
+}
+$('#dashboard-date').addEventListener('change', event => setDateFilter(event.target.value));
+$('#inventory-date').addEventListener('change', event => setDateFilter(event.target.value));
+$$('[data-clear-date]').forEach(button => button.addEventListener('click', () => setDateFilter('')));
 
 document.addEventListener('click', async event => {
   const remissionButton = event.target.closest('[data-remission-id]');
@@ -192,7 +210,12 @@ $('#remission-form').addEventListener('submit', async event => {
 
 $('#clear-remission').addEventListener('click', clearRemission);
 $('#close-document').addEventListener('click', () => $('#remission-dialog').close());
-$('#print-document').addEventListener('click', () => window.print());
+$('#print-document').addEventListener('click', () => {
+  const originalTitle = document.title;
+  document.title = $('#printable-document').dataset.filename || 'remision';
+  window.addEventListener('afterprint', () => { document.title = originalTitle; }, { once: true });
+  window.print();
+});
 
 (async function init() {
   try { const session = await api('/api/auth/session'); if (session.authenticated) await showApp(); else showLogin(); }
