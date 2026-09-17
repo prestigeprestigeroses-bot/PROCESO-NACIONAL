@@ -1,4 +1,4 @@
-const state = { inventory: [], remissions: [], lines: [], config: {}, totals: {}, activeView: 'dashboard', selectedDate: '' };
+const state = { inventory: [], remissions: [], lines: [], config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const money = value => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -41,7 +41,11 @@ async function refreshAll() {
 }
 
 function dateFilteredInventory() {
-  return state.selectedDate ? state.inventory.filter(item => item.date === state.selectedDate) : state.inventory;
+  return state.inventory.filter(item => {
+    const matchesDate = !state.selectedDate || item.date === state.selectedDate;
+    const matchesGrade = state.selectedGrade === 'ALL' || item.gradeCm === state.selectedGrade;
+    return matchesDate && matchesGrade;
+  });
 }
 
 function renderDashboard(totals = state.totals) {
@@ -169,9 +173,18 @@ function setDateFilter(value) {
   renderDashboard();
   renderInventory();
 }
+function setGradeFilter(value) {
+  state.selectedGrade = value;
+  $('#dashboard-grade').value = value;
+  $('#inventory-grade').value = value;
+  renderDashboard();
+  renderInventory();
+}
 $('#dashboard-date').addEventListener('change', event => setDateFilter(event.target.value));
 $('#inventory-date').addEventListener('change', event => setDateFilter(event.target.value));
-$$('[data-clear-date]').forEach(button => button.addEventListener('click', () => setDateFilter('')));
+$('#dashboard-grade').addEventListener('change', event => setGradeFilter(event.target.value));
+$('#inventory-grade').addEventListener('change', event => setGradeFilter(event.target.value));
+$$('[data-clear-filters]').forEach(button => button.addEventListener('click', () => { setDateFilter(''); setGradeFilter('ALL'); }));
 
 document.addEventListener('click', async event => {
   const remissionButton = event.target.closest('[data-remission-id]');

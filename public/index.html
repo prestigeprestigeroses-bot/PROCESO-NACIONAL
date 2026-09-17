@@ -62,7 +62,7 @@
 
       <div class="content">
         <section class="view active" id="view-dashboard">
-          <div class="section-heading"><div><h2>Inventario nacional</h2><p>Existencias disponibles agrupadas por fecha y variedad.</p></div><div class="heading-actions"><label class="date-filter">Fecha<input type="date" id="dashboard-date"></label><button class="filter-clear" type="button" data-clear-date>Ver todas</button><button class="text-button" data-go="inventory">Ver inventario completo →</button></div></div>
+          <div class="section-heading"><div><h2>Inventario nacional</h2><p>Existencias disponibles agrupadas por fecha y variedad.</p></div><div class="heading-actions"><label class="grade-filter">Grado<select id="dashboard-grade"><option value="ALL">Todos</option><option value="NACIONAL">Nacional</option><option value="BAJAS">Bajas</option><option value="NACIONAL GRANEL">Nacional granel</option></select></label><label class="date-filter">Fecha<input type="date" id="dashboard-date"></label><button class="filter-clear" type="button" data-clear-filters>Limpiar</button><button class="text-button" data-go="inventory">Ver inventario completo →</button></div></div>
           <div class="metric-grid">
             <article class="metric metric--green"><span class="metric-label">VARIEDADES</span><strong id="metric-varieties">—</strong><small>activas en inventario</small></article>
             <article class="metric metric--gold"><span class="metric-label">RAMOS DISPONIBLES</span><strong id="metric-bunches">—</strong><small>listos para despacho</small></article>
@@ -83,7 +83,7 @@
 
         <section class="view" id="view-inventory">
           <div class="section-heading inventory-heading"><div><h2>Inventario nacional</h2><p>Datos en tiempo real provenientes de la tabla de escaneos.</p></div><span class="live-chip"><i></i>EN VIVO</span></div>
-          <div class="toolbar"><div class="toolbar-filters"><label class="search"><span>⌕</span><input id="inventory-search" placeholder="Buscar por fecha, variedad o grado"></label><label class="date-filter">Fecha<input type="date" id="inventory-date"></label><button class="filter-clear" type="button" data-clear-date>Ver todas</button></div><div class="stock-summary" id="stock-summary"></div></div>
+          <div class="toolbar"><div class="toolbar-filters"><label class="search"><span>⌕</span><input id="inventory-search" placeholder="Buscar variedad"></label><label class="grade-filter">Grado<select id="inventory-grade"><option value="ALL">Todos</option><option value="NACIONAL">Nacional</option><option value="BAJAS">Bajas</option><option value="NACIONAL GRANEL">Nacional granel</option></select></label><label class="date-filter">Fecha<input type="date" id="inventory-date"></label><button class="filter-clear" type="button" data-clear-filters>Limpiar</button></div><div class="stock-summary" id="stock-summary"></div></div>
           <article class="panel panel--table">
             <div class="table-wrap"><table class="inventory-table"><thead><tr><th>Fecha</th><th>Variedad</th><th>Grado</th><th>Tallos x ramo</th><th>Ramos</th><th>Total tallos</th></tr></thead><tbody id="inventory-body"></tbody></table></div>
             <div class="empty-state is-hidden" id="inventory-empty"><strong>Sin resultados</strong><span>Pruebe con otro término de búsqueda.</span></div>
