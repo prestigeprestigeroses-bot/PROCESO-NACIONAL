@@ -62,7 +62,7 @@
 
       <div class="content">
         <section class="view active" id="view-dashboard">
-          <div class="section-heading"><div><h2>Inventario de hoy</h2><p>Existencias disponibles en este momento.</p></div><button class="text-button" data-go="inventory">Ver inventario completo →</button></div>
+          <div class="section-heading"><div><h2>Inventario nacional</h2><p>Existencias disponibles agrupadas por fecha y variedad.</p></div><button class="text-button" data-go="inventory">Ver inventario completo →</button></div>
           <div class="metric-grid">
             <article class="metric metric--green"><span class="metric-label">VARIEDADES</span><strong id="metric-varieties">—</strong><small>activas en inventario</small></article>
             <article class="metric metric--gold"><span class="metric-label">RAMOS DISPONIBLES</span><strong id="metric-bunches">—</strong><small>listos para despacho</small></article>
@@ -72,7 +72,7 @@
           <div class="dashboard-grid">
             <article class="panel panel--table">
               <div class="panel-head"><div><h3>Disponibilidad por variedad</h3><p>Las cantidades cambian al confirmar una remisión.</p></div><span class="live-chip"><i></i>EN VIVO</span></div>
-              <div class="table-wrap"><table><thead><tr><th>Variedad</th><th>Color</th><th>Ramos</th><th>Tallos</th><th>Estado</th></tr></thead><tbody id="dashboard-inventory"></tbody></table></div>
+              <div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Variedad</th><th>Grado</th><th>Tallos x ramo</th><th>Ramos</th><th>Total tallos</th></tr></thead><tbody id="dashboard-inventory"></tbody></table></div>
             </article>
             <article class="panel activity-panel">
               <div class="panel-head"><div><h3>Últimas salidas</h3><p>Remisiones recientes.</p></div></div>
@@ -82,10 +82,10 @@
         </section>
 
         <section class="view" id="view-inventory">
-          <div class="section-heading inventory-heading"><div><h2>Inventario</h2><p>Consulte, agregue o ajuste existencias por variedad.</p></div><button class="button button--dark" id="add-variety-button">＋ Agregar variedad</button></div>
-          <div class="toolbar"><label class="search"><span>⌕</span><input id="inventory-search" placeholder="Buscar por variedad o color"></label><div class="stock-summary" id="stock-summary"></div></div>
+          <div class="section-heading inventory-heading"><div><h2>Inventario nacional</h2><p>Datos en tiempo real provenientes de la tabla de escaneos.</p></div><span class="live-chip"><i></i>EN VIVO</span></div>
+          <div class="toolbar"><label class="search"><span>⌕</span><input id="inventory-search" placeholder="Buscar por fecha, variedad o grado"></label><div class="stock-summary" id="stock-summary"></div></div>
           <article class="panel panel--table">
-            <div class="table-wrap"><table class="inventory-table"><thead><tr><th>Variedad</th><th>Color</th><th>Ramos</th><th>Tallos</th><th>Precio ramo</th><th>Precio tallo</th><th>Actualizado</th><th></th></tr></thead><tbody id="inventory-body"></tbody></table></div>
+            <div class="table-wrap"><table class="inventory-table"><thead><tr><th>Fecha</th><th>Variedad</th><th>Grado</th><th>Tallos x ramo</th><th>Ramos</th><th>Total tallos</th></tr></thead><tbody id="inventory-body"></tbody></table></div>
             <div class="empty-state is-hidden" id="inventory-empty"><strong>Sin resultados</strong><span>Pruebe con otro término de búsqueda.</span></div>
           </article>
         </section>
@@ -108,8 +108,8 @@
                   <div class="panel-title"><span>02</span><div><h3>Flor a despachar</h3><p>El sistema validará las existencias antes de confirmar.</p></div></div>
                   <div class="line-add">
                     <label>Variedad<select id="line-variety"><option value="">Seleccione una variedad</option></select></label>
-                    <label>Ramos<input id="line-bunches" type="number" min="0" value="0"></label>
-                    <label>Tallos<input id="line-stems" type="number" min="0" value="0"></label>
+                    <label>Ramos<input id="line-bunches" type="number" min="1" value="1"></label>
+                    <label>Precio por ramo<input id="line-price" type="number" min="0" step="0.01" value="0"></label>
                     <button class="button button--dark" type="button" id="add-line-button">Agregar</button>
                   </div>
                   <p class="inline-error" id="line-error"></p>
@@ -142,35 +142,6 @@
       </div>
     </main>
   </div>
-
-  <dialog id="inventory-dialog">
-    <form method="dialog" class="dialog-card" id="inventory-form">
-      <div class="dialog-head"><div><p class="eyebrow">INVENTARIO</p><h2>Nueva variedad</h2></div><button class="icon-button" value="cancel" aria-label="Cerrar">×</button></div>
-      <div class="form-grid">
-        <label class="span-2">Variedad *<input name="variety" required></label>
-        <label class="span-2">Color<input name="color"></label>
-        <label>Ramos<input name="bunches" type="number" min="0" value="0" required></label>
-        <label>Tallos<input name="stems" type="number" min="0" value="0" required></label>
-        <label>Tallos por ramo<input name="stemsPerBunch" type="number" min="1" value="25" required></label>
-        <span></span>
-        <label>Precio por ramo<input name="pricePerBunch" type="number" min="0" step="0.01" value="0" required></label>
-        <label>Precio por tallo<input name="pricePerStem" type="number" min="0" step="0.01" value="0" required></label>
-      </div>
-      <p class="form-error" id="inventory-error"></p>
-      <div class="dialog-actions"><button class="button button--ghost" value="cancel">Cancelar</button><button class="button button--primary" type="submit" value="default">Guardar variedad</button></div>
-    </form>
-  </dialog>
-
-  <dialog id="adjust-dialog">
-    <form method="dialog" class="dialog-card" id="adjust-form">
-      <div class="dialog-head"><div><p class="eyebrow">AJUSTE MANUAL</p><h2 id="adjust-title">Ajustar existencia</h2></div><button class="icon-button" value="cancel" aria-label="Cerrar">×</button></div>
-      <input type="hidden" name="id">
-      <p class="dialog-copy">Use valores positivos para ingresar flor o negativos para corregir una salida.</p>
-      <div class="form-grid"><label>Cambio en ramos<input name="bunches" type="number" value="0" required></label><label>Cambio en tallos<input name="stems" type="number" value="0" required></label></div>
-      <p class="form-error" id="adjust-error"></p>
-      <div class="dialog-actions"><button class="button button--ghost" value="cancel">Cancelar</button><button class="button button--primary" type="submit" value="default">Aplicar ajuste</button></div>
-    </form>
-  </dialog>
 
   <dialog id="remission-dialog" class="document-dialog">
     <div class="document-actions"><button class="button button--ghost" id="close-document">Cerrar</button><button class="button button--primary" id="print-document">Imprimir / Guardar PDF</button></div>

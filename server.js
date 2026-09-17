@@ -77,8 +77,6 @@ app.get('/api/config', requireAuth, (_request, response) => response.json({
 }));
 app.get('/api/dashboard', requireAuth, async (_request, response, next) => { try { response.json(await store.dashboard()); } catch (error) { next(error); } });
 app.get('/api/inventory', requireAuth, async (_request, response, next) => { try { response.json(await store.listInventory()); } catch (error) { next(error); } });
-app.post('/api/inventory', requireAuth, async (request, response, next) => { try { response.status(201).json(await store.saveInventory(request.body)); } catch (error) { next(error); } });
-app.patch('/api/inventory/:id/adjust', requireAuth, async (request, response, next) => { try { response.json(await store.adjustInventory(request.params.id, request.body)); } catch (error) { next(error); } });
 app.get('/api/remissions', requireAuth, async (_request, response, next) => { try { response.json(await store.listRemissions()); } catch (error) { next(error); } });
 app.get('/api/remissions/:id', requireAuth, async (request, response, next) => { try { const row = await store.getRemission(request.params.id); if (!row) return response.status(404).json({ error: 'Remisión no encontrada.' }); response.json(row); } catch (error) { next(error); } });
 app.post('/api/remissions', requireAuth, async (request, response, next) => { try { response.status(201).json(await store.createRemission(request.body)); } catch (error) { next(error); } });
@@ -88,7 +86,7 @@ app.use((_request, response) => response.sendFile(path.join(__dirname, 'public',
 
 app.use((error, _request, response, _next) => {
   console.error(error);
-  const known = /obligatori|insuficiente|negativ|no encontr|repetida/i.test(error.message);
+  const known = /obligatori|insuficiente|negativ|no encontr|repetida|no es válida|precio por ramo|quedan/i.test(error.message);
   response.status(known ? 400 : 500).json({ error: known ? error.message : 'No fue posible completar la operación.' });
 });
 

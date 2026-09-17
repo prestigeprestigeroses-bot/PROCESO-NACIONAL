@@ -4,13 +4,15 @@ Aplicación web para controlar salidas nacionales de flor. Consulta existencias 
 
 ## Funciones incluidas
 
-- Inventario en tiempo real por variedad, color, ramos y tallos.
-- Precios independientes por ramo y por tallo.
+- Inventario en tiempo real alimentado desde `public.scans`.
+- Agrupación por fecha, variedad, grado y cantidad de tallos por ramo.
+- Filtro exclusivo para los grados `BAJAS`, `NACIONAL` y `NACIONAL GRANEL`.
+- Número de ramos calculado con `COUNT(*)` y total de tallos con `SUM(tallos)`.
+- Precio por ramo definido al preparar cada remisión.
 - Creación de remisiones con cliente, destino y observaciones.
 - Validación de existencias y descuento transaccional al confirmar.
 - Documento A4 listo para imprimir o guardar como PDF.
 - Historial de remisiones y reimpresión.
-- Ingreso y ajustes manuales de inventario.
 - Acceso protegido por usuario y contraseña.
 - Diseño adaptable para computador, tableta y celular.
 
@@ -40,13 +42,20 @@ Abra `http://localhost:3000`. Sin PostgreSQL, el modo local guarda la informaci�
 4. Opcionalmente configure `COMPANY_NIT`, `COMPANY_PHONE` y `COMPANY_ADDRESS`.
 5. Despliegue y genere el dominio público desde **Settings → Networking**.
 
-La aplicación crea las tablas automáticamente al iniciar y utiliza transacciones/bloqueo de filas para evitar que dos remisiones descuenten el mismo inventario al mismo tiempo.
+La aplicación crea sus tablas de remisiones automáticamente al iniciar y utiliza transacciones/bloqueos para evitar que dos remisiones descuenten el mismo grupo de inventario al mismo tiempo. Los registros originales de `scans` se conservan: la disponibilidad se calcula como entradas escaneadas menos ramos incluidos en remisiones.
 En producción inicia sin variedades de ejemplo. Use `SEED_DEMO_DATA=true` únicamente si desea cargar los datos demostrativos.
 
 ## Variables
 
 Use [.env.example](./.env.example) como referencia. No suba el archivo `.env` al repositorio.
 
-## Nota para conectar otra base existente
+## Origen de los datos
 
-El sistema está preparado para PostgreSQL. Si el inventario ya vive en otra base o tiene nombres de columnas diferentes, adapte las consultas de `src/store.js` o prepare una vista compatible con los campos: variedad, color, ramos, tallos, tallos por ramo y precios.
+El sistema consulta la tabla PostgreSQL `public.scans` y utiliza:
+
+- `ts`: fecha del inventario.
+- `variedad_nombre`: nombre de la variedad.
+- `grado_cm`: clasificación; solo se aceptan BAJAS, NACIONAL y NACIONAL GRANEL.
+- `tallos`: cantidad de tallos del ramo.
+
+Cada fila válida de `scans` se interpreta como un ramo. Los datos se agrupan sin modificar ni eliminar los escaneos originales.

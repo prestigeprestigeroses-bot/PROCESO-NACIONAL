@@ -5,6 +5,7 @@ const { Pool } = require('pg');
 const usePostgres = Boolean(process.env.DATABASE_URL);
 const dataDirectory = path.join(process.cwd(), '.data');
 const dataFile = path.join(dataDirectory, 'flor-data.json');
+const allowedGrades = ['BAJAS', 'NACIONAL', 'NACIONAL GRANEL'];
 
 let pool;
 let memory;
@@ -21,6 +22,30 @@ const initialData = () => ({
   ],
   remissions: []
 });
+
+function dateOnly(value = new Date()) {
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value).slice(0, 10);
+}
+
+function inventoryKey(item) {
+  return Buffer.from(JSON.stringify([
+    dateOnly(item.date ?? item.sourceDate ?? item.updatedAt),
+    String(item.variety || '').trim(),
+    String(item.gradeCm || 'NACIONAL').trim().toUpperCase(),
+    Number(item.stemsPerBunch) || 0
+  ])).toString('base64url');
+}
+
+function decodeInventoryKey(key) {
+  try {
+    const [sourceDate, variety, gradeCm, stemsPerBunch] = JSON.parse(Buffer.from(String(key), 'base64url').toString('utf8'));
+    if (!sourceDate || !variety || !allowedGrades.includes(gradeCm) || !Number(stemsPerBunch)) throw new Error();
+    return { sourceDate, variety, gradeCm, stemsPerBunch: Number(stemsPerBunch) };
+  } catch {
+    throw new Error('La selección de inventario no es válida. Actualice la página e intente nuevamente.');
+  }
+}
 
 function persistMemory() {
   fs.mkdirSync(dataDirectory, { recursive: true });
@@ -71,15 +96,23 @@ async function init() {
     CREATE TABLE IF NOT EXISTS remission_items (
       id BIGSERIAL PRIMARY KEY,
       remission_id BIGINT NOT NULL REFERENCES remissions(id) ON DELETE CASCADE,
-      inventory_id BIGINT NOT NULL REFERENCES inventory(id),
+      inventory_id BIGINT REFERENCES inventory(id),
       variety VARCHAR(120) NOT NULL,
+      source_date DATE,
+      grade_cm VARCHAR(40),
+      stems_per_bunch INTEGER,
       bunches INTEGER NOT NULL DEFAULT 0 CHECK (bunches >= 0),
       stems INTEGER NOT NULL DEFAULT 0 CHECK (stems >= 0),
       unit_price_bunch NUMERIC(12,2) NOT NULL DEFAULT 0,
       unit_price_stem NUMERIC(12,2) NOT NULL DEFAULT 0,
       subtotal NUMERIC(14,2) NOT NULL DEFAULT 0
     );
+    ALTER TABLE remission_items ALTER COLUMN inventory_id DROP NOT NULL;
+    ALTER TABLE remission_items ADD COLUMN IF NOT EXISTS source_date DATE;
+    ALTER TABLE remission_items ADD COLUMN IF NOT EXISTS grade_cm VARCHAR(40);
+    ALTER TABLE remission_items ADD COLUMN IF NOT EXISTS stems_per_bunch INTEGER;
     CREATE INDEX IF NOT EXISTS idx_remissions_created_at ON remissions(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_remission_items_source ON remission_items(source_date,variety,grade_cm,stems_per_bunch);
   `);
 
   const countResult = await pool.query('SELECT COUNT(*)::int AS count FROM inventory');
@@ -126,9 +159,54 @@ function mapRemission(row, items = []) {
 }
 
 async function listInventory() {
-  if (!usePostgres) return [...memory.inventory].sort((a, b) => a.variety.localeCompare(b.variety));
-  const result = await pool.query('SELECT * FROM inventory ORDER BY variety');
-  return result.rows.map(mapInventory);
+  if (!usePostgres) {
+    return [...memory.inventory].map(item => {
+      const normalized = { ...item, date: dateOnly(item.date ?? item.updatedAt), gradeCm: item.gradeCm || 'NACIONAL' };
+      return { ...normalized, id: inventoryKey(normalized), key: inventoryKey(normalized) };
+    }).sort((a, b) => b.date.localeCompare(a.date) || a.variety.localeCompare(b.variety));
+  }
+  const result = await pool.query(`
+    WITH source AS (
+      SELECT ts::date AS source_date,
+             TRIM(variedad_nombre) AS variety,
+             UPPER(TRIM(grado_cm)) AS grade_cm,
+             tallos AS stems_per_bunch,
+             COUNT(*)::int AS source_bunches,
+             SUM(tallos)::int AS source_stems,
+             MAX(ts) AS updated_at
+      FROM public.scans
+      WHERE UPPER(TRIM(grado_cm)) = ANY($1::text[])
+        AND variedad_nombre IS NOT NULL AND TRIM(variedad_nombre) <> ''
+        AND tallos IS NOT NULL AND tallos > 0
+      GROUP BY ts::date,TRIM(variedad_nombre),UPPER(TRIM(grado_cm)),tallos
+    ), used AS (
+      SELECT source_date,variety,grade_cm,stems_per_bunch,
+             COALESCE(SUM(bunches),0)::int AS used_bunches,
+             COALESCE(SUM(stems),0)::int AS used_stems
+      FROM remission_items
+      WHERE source_date IS NOT NULL
+      GROUP BY source_date,variety,grade_cm,stems_per_bunch
+    )
+    SELECT source.source_date,source.variety,source.grade_cm,source.stems_per_bunch,source.updated_at,
+           GREATEST(source.source_bunches-COALESCE(used.used_bunches,0),0)::int AS bunches,
+           GREATEST(source.source_stems-COALESCE(used.used_stems,0),0)::int AS stems
+    FROM source
+    LEFT JOIN used USING (source_date,variety,grade_cm,stems_per_bunch)
+    WHERE source.source_bunches-COALESCE(used.used_bunches,0) > 0
+    ORDER BY source.source_date DESC,source.variety,source.grade_cm,source.stems_per_bunch
+  `, [allowedGrades]);
+  return result.rows.map(row => {
+    const item = {
+      date: dateOnly(row.source_date),
+      variety: row.variety,
+      gradeCm: row.grade_cm,
+      stemsPerBunch: Number(row.stems_per_bunch),
+      bunches: Number(row.bunches),
+      stems: Number(row.stems),
+      updatedAt: row.updated_at
+    };
+    return { ...item, id: inventoryKey(item), key: inventoryKey(item) };
+  });
 }
 
 async function saveInventory(input) {
@@ -194,13 +272,14 @@ function cleanRemissionInput(input) {
   };
   if (!details.clientName) throw new Error('El nombre del cliente es obligatorio.');
   const items = (Array.isArray(input.items) ? input.items : [])
-    .map(row => ({ id: Number(row.id), bunches: Math.max(0, Number.parseInt(row.bunches, 10) || 0), stems: Math.max(0, Number.parseInt(row.stems, 10) || 0) }))
-    .filter(row => row.id && (row.bunches > 0 || row.stems > 0));
+    .map(row => ({ key: String(row.key || row.id || ''), bunches: Math.max(0, Number.parseInt(row.bunches, 10) || 0), unitPriceBunch: Math.max(0, Number(row.unitPriceBunch) || 0) }))
+    .filter(row => row.key && row.bunches > 0);
   if (!items.length) throw new Error('Agregue al menos una variedad a la remisión.');
   const ids = new Set();
   for (const item of items) {
-    if (ids.has(item.id)) throw new Error('Una variedad está repetida en la remisión.');
-    ids.add(item.id);
+    if (item.unitPriceBunch <= 0) throw new Error('Ingrese un precio por ramo mayor que cero.');
+    if (ids.has(item.key)) throw new Error('Una variedad está repetida en la remisión.');
+    ids.add(item.key);
   }
   return { details, items };
 }
@@ -213,26 +292,30 @@ async function createRemission(input) {
   const { details, items } = cleanRemissionInput(input);
   if (!usePostgres) {
     const selected = items.map(requested => {
-      const stock = memory.inventory.find(row => row.id === requested.id);
+      const decoded = decodeInventoryKey(requested.key);
+      const stock = memory.inventory.find(row => inventoryKey({ ...row, date: dateOnly(row.date ?? row.updatedAt), gradeCm: row.gradeCm || 'NACIONAL' }) === requested.key);
       if (!stock) throw new Error('Una de las variedades ya no existe.');
-      if (requested.bunches > stock.bunches || requested.stems > stock.stems) throw new Error(`Stock insuficiente de ${stock.variety}.`);
-      return { stock, requested };
+      if (requested.bunches > stock.bunches) throw new Error(`Stock insuficiente de ${stock.variety}.`);
+      return { stock, requested, decoded };
     });
-    const remissionItems = selected.map(({ stock, requested }) => ({
-      inventoryId: stock.id,
+    const remissionItems = selected.map(({ stock, requested, decoded }) => ({
+      inventoryId: null,
       variety: stock.variety,
+      sourceDate: decoded.sourceDate,
+      gradeCm: decoded.gradeCm,
+      stemsPerBunch: decoded.stemsPerBunch,
       bunches: requested.bunches,
-      stems: requested.stems,
-      unitPriceBunch: stock.pricePerBunch,
-      unitPriceStem: stock.pricePerStem,
-      subtotal: requested.bunches * stock.pricePerBunch + requested.stems * stock.pricePerStem
+      stems: requested.bunches * decoded.stemsPerBunch,
+      unitPriceBunch: requested.unitPriceBunch,
+      unitPriceStem: 0,
+      subtotal: requested.bunches * requested.unitPriceBunch
     }));
     const total = remissionItems.reduce((sum, row) => sum + row.subtotal, 0);
     const id = memory.nextRemissionId++;
     const remission = { id, remissionNumber: nextNumber(id), ...details, total, createdAt: new Date().toISOString(), items: remissionItems };
-    selected.forEach(({ stock, requested }) => {
+    selected.forEach(({ stock, requested, decoded }) => {
       stock.bunches -= requested.bunches;
-      stock.stems -= requested.stems;
+      stock.stems -= requested.bunches * decoded.stemsPerBunch;
       stock.updatedAt = new Date().toISOString();
     });
     memory.remissions.unshift(remission);
@@ -245,19 +328,33 @@ async function createRemission(input) {
     await client.query('BEGIN');
     const inventoryRows = [];
     for (const requested of items) {
-      const result = await client.query('SELECT * FROM inventory WHERE id=$1 FOR UPDATE', [requested.id]);
-      const stock = result.rows[0] && mapInventory(result.rows[0]);
-      if (!stock) throw new Error('Una de las variedades ya no existe.');
-      if (requested.bunches > stock.bunches || requested.stems > stock.stems) throw new Error(`Stock insuficiente de ${stock.variety}.`);
-      inventoryRows.push({ stock, requested });
+      const selected = decodeInventoryKey(requested.key);
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [requested.key]);
+      const source = await client.query(
+        `SELECT COUNT(*)::int AS source_bunches
+         FROM public.scans
+         WHERE ts::date=$1::date AND TRIM(variedad_nombre)=$2
+           AND UPPER(TRIM(grado_cm))=$3 AND tallos=$4`,
+        [selected.sourceDate, selected.variety, selected.gradeCm, selected.stemsPerBunch]
+      );
+      const used = await client.query(
+        `SELECT COALESCE(SUM(bunches),0)::int AS used_bunches
+         FROM remission_items
+         WHERE source_date=$1::date AND variety=$2 AND grade_cm=$3 AND stems_per_bunch=$4`,
+        [selected.sourceDate, selected.variety, selected.gradeCm, selected.stemsPerBunch]
+      );
+      const availableBunches = Number(source.rows[0].source_bunches) - Number(used.rows[0].used_bunches);
+      if (requested.bunches > availableBunches) throw new Error(`Stock insuficiente de ${selected.variety}. Quedan ${Math.max(availableBunches, 0)} ramos.`);
+      inventoryRows.push({ stock: { ...selected, bunches: availableBunches }, requested });
     }
     const sequenceResult = await client.query("SELECT nextval(pg_get_serial_sequence('remissions','id')) AS id");
     const id = Number(sequenceResult.rows[0].id);
     const remissionNumber = nextNumber(id);
     const detailRows = inventoryRows.map(({ stock, requested }) => ({
-      inventoryId: stock.id, variety: stock.variety, bunches: requested.bunches, stems: requested.stems,
-      unitPriceBunch: stock.pricePerBunch, unitPriceStem: stock.pricePerStem,
-      subtotal: requested.bunches * stock.pricePerBunch + requested.stems * stock.pricePerStem
+      inventoryId: null, variety: stock.variety, sourceDate: stock.sourceDate, gradeCm: stock.gradeCm,
+      stemsPerBunch: stock.stemsPerBunch, bunches: requested.bunches, stems: requested.bunches * stock.stemsPerBunch,
+      unitPriceBunch: requested.unitPriceBunch, unitPriceStem: 0,
+      subtotal: requested.bunches * requested.unitPriceBunch
     }));
     const total = detailRows.reduce((sum, row) => sum + row.subtotal, 0);
     const remissionResult = await client.query(
@@ -267,11 +364,10 @@ async function createRemission(input) {
     );
     for (const row of detailRows) {
       await client.query(
-        `INSERT INTO remission_items (remission_id,inventory_id,variety,bunches,stems,unit_price_bunch,unit_price_stem,subtotal)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        [id, row.inventoryId, row.variety, row.bunches, row.stems, row.unitPriceBunch, row.unitPriceStem, row.subtotal]
+        `INSERT INTO remission_items (remission_id,inventory_id,variety,source_date,grade_cm,stems_per_bunch,bunches,stems,unit_price_bunch,unit_price_stem,subtotal)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [id, row.inventoryId, row.variety, row.sourceDate, row.gradeCm, row.stemsPerBunch, row.bunches, row.stems, row.unitPriceBunch, row.unitPriceStem, row.subtotal]
       );
-      await client.query('UPDATE inventory SET bunches=bunches-$1, stems=stems-$2, updated_at=NOW() WHERE id=$3', [row.bunches, row.stems, row.inventoryId]);
     }
     await client.query('COMMIT');
     return mapRemission(remissionResult.rows[0], detailRows);
@@ -297,7 +393,9 @@ async function getRemission(id) {
   ]);
   if (!header.rows[0]) return null;
   const items = details.rows.map(row => ({
-    inventoryId: Number(row.inventory_id), variety: row.variety, bunches: Number(row.bunches), stems: Number(row.stems),
+    inventoryId: row.inventory_id ? Number(row.inventory_id) : null, variety: row.variety,
+    sourceDate: row.source_date ? dateOnly(row.source_date) : null, gradeCm: row.grade_cm || '', stemsPerBunch: Number(row.stems_per_bunch || 0),
+    bunches: Number(row.bunches), stems: Number(row.stems),
     unitPriceBunch: Number(row.unit_price_bunch), unitPriceStem: Number(row.unit_price_stem), subtotal: Number(row.subtotal)
   }));
   return mapRemission(header.rows[0], items);
@@ -307,7 +405,7 @@ async function dashboard() {
   const [inventory, remissions] = await Promise.all([listInventory(), listRemissions(8)]);
   return {
     totals: {
-      varieties: inventory.length,
+      varieties: new Set(inventory.map(row => row.variety)).size,
       bunches: inventory.reduce((sum, row) => sum + row.bunches, 0),
       stems: inventory.reduce((sum, row) => sum + row.stems, 0),
       todaySales: remissions.filter(row => new Date(row.createdAt).toDateString() === new Date().toDateString()).reduce((sum, row) => sum + row.total, 0)
