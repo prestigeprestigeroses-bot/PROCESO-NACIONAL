@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#173f35">
+  <meta name="description" content="Inventario de flor y control de remisiones en tiempo real.">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+  <title>Flora · Inventario y remisiones</title>
+</head>
+<body>
+  <section class="login-screen" id="login-screen">
+    <div class="login-brand" aria-hidden="true">
+      <div class="brand-mark brand-mark--large">F</div>
+      <p>CONTROL DE SALIDA NACIONAL</p>
+      <h1>Cada tallo,<br>bien contado.</h1>
+      <div class="stem-art"><span></span><span></span><span></span></div>
+    </div>
+    <div class="login-panel">
+      <form class="login-card" id="login-form">
+        <div class="mobile-brand"><div class="brand-mark">F</div><strong>Flora</strong></div>
+        <p class="eyebrow">ACCESO SEGURO</p>
+        <h2>Bienvenido</h2>
+        <p class="muted">Ingrese para consultar existencias y generar remisiones.</p>
+        <label>Usuario<input name="user" autocomplete="username" required></label>
+        <label>Contraseña<input name="password" type="password" autocomplete="current-password" required></label>
+        <p class="form-error" id="login-error" role="alert"></p>
+        <button class="button button--primary button--wide" type="submit">Ingresar al sistema</button>
+        <small>La sesión se cerrará automáticamente después de 12 horas.</small>
+      </form>
+    </div>
+  </section>
+
+  <div class="app-shell is-hidden" id="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand"><div class="brand-mark">F</div><div><strong>Flora</strong><span>Salida nacional</span></div></div>
+      <nav aria-label="Navegación principal">
+        <button class="nav-link active" data-view="dashboard"><span class="nav-icon">⌂</span>Resumen</button>
+        <button class="nav-link" data-view="inventory"><span class="nav-icon">▦</span>Inventario</button>
+        <button class="nav-link" data-view="new-remission"><span class="nav-icon">＋</span>Nueva remisión</button>
+        <button class="nav-link" data-view="history"><span class="nav-icon">≡</span>Historial</button>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="live-badge"><span></span> Base de datos activa</div>
+        <button class="logout-button" id="logout-button">Cerrar sesión</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="menu-button" id="menu-button" aria-label="Abrir menú">☰</button>
+        <div><p class="topbar-kicker">OPERACIÓN NACIONAL</p><h1 id="view-title">Resumen</h1></div>
+        <div class="topbar-actions">
+          <div class="today"><span>HOY</span><strong id="today-label"></strong></div>
+          <button class="button button--primary top-new" data-go="new-remission">＋ Nueva remisión</button>
+        </div>
+      </header>
+
+      <div class="content">
+        <section class="view active" id="view-dashboard">
+          <div class="section-heading"><div><h2>Inventario de hoy</h2><p>Existencias disponibles en este momento.</p></div><button class="text-button" data-go="inventory">Ver inventario completo →</button></div>
+          <div class="metric-grid">
+            <article class="metric metric--green"><span class="metric-label">VARIEDADES</span><strong id="metric-varieties">—</strong><small>activas en inventario</small></article>
+            <article class="metric metric--gold"><span class="metric-label">RAMOS DISPONIBLES</span><strong id="metric-bunches">—</strong><small>listos para despacho</small></article>
+            <article class="metric metric--coral"><span class="metric-label">TALLOS DISPONIBLES</span><strong id="metric-stems">—</strong><small>existencia total</small></article>
+            <article class="metric metric--ink"><span class="metric-label">VENTAS DE HOY</span><strong id="metric-sales">—</strong><small>valor despachado</small></article>
+          </div>
+          <div class="dashboard-grid">
+            <article class="panel panel--table">
+              <div class="panel-head"><div><h3>Disponibilidad por variedad</h3><p>Las cantidades cambian al confirmar una remisión.</p></div><span class="live-chip"><i></i>EN VIVO</span></div>
+              <div class="table-wrap"><table><thead><tr><th>Variedad</th><th>Color</th><th>Ramos</th><th>Tallos</th><th>Estado</th></tr></thead><tbody id="dashboard-inventory"></tbody></table></div>
+            </article>
+            <article class="panel activity-panel">
+              <div class="panel-head"><div><h3>Últimas salidas</h3><p>Remisiones recientes.</p></div></div>
+              <div class="activity-list" id="dashboard-remissions"></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" id="view-inventory">
+          <div class="section-heading inventory-heading"><div><h2>Inventario</h2><p>Consulte, agregue o ajuste existencias por variedad.</p></div><button class="button button--dark" id="add-variety-button">＋ Agregar variedad</button></div>
+          <div class="toolbar"><label class="search"><span>⌕</span><input id="inventory-search" placeholder="Buscar por variedad o color"></label><div class="stock-summary" id="stock-summary"></div></div>
+          <article class="panel panel--table">
+            <div class="table-wrap"><table class="inventory-table"><thead><tr><th>Variedad</th><th>Color</th><th>Ramos</th><th>Tallos</th><th>Precio ramo</th><th>Precio tallo</th><th>Actualizado</th><th></th></tr></thead><tbody id="inventory-body"></tbody></table></div>
+            <div class="empty-state is-hidden" id="inventory-empty"><strong>Sin resultados</strong><span>Pruebe con otro término de búsqueda.</span></div>
+          </article>
+        </section>
+
+        <section class="view" id="view-new-remission">
+          <form id="remission-form">
+            <div class="remission-heading"><div><p class="eyebrow">NUEVO DESPACHO</p><h2>Crear remisión</h2><p>Seleccione el cliente y detalle la flor que va a salir.</p></div><div class="step-chip"><span>1</span> Datos y productos</div></div>
+            <div class="remission-layout">
+              <div class="remission-main">
+                <article class="panel form-panel">
+                  <div class="panel-title"><span>01</span><div><h3>Datos del cliente</h3><p>Información que aparecerá en el documento.</p></div></div>
+                  <div class="form-grid">
+                    <label class="span-2">Nombre o razón social *<input name="clientName" placeholder="Ej. Flores del Caribe S.A.S." required></label>
+                    <label>NIT / Documento<input name="clientDocument" placeholder="900.000.000-1"></label>
+                    <label>Teléfono<input name="clientPhone" placeholder="300 000 0000"></label>
+                    <label class="span-2">Destino<input name="destination" placeholder="Ciudad o dirección de entrega"></label>
+                  </div>
+                </article>
+                <article class="panel form-panel">
+                  <div class="panel-title"><span>02</span><div><h3>Flor a despachar</h3><p>El sistema validará las existencias antes de confirmar.</p></div></div>
+                  <div class="line-add">
+                    <label>Variedad<select id="line-variety"><option value="">Seleccione una variedad</option></select></label>
+                    <label>Ramos<input id="line-bunches" type="number" min="0" value="0"></label>
+                    <label>Tallos<input id="line-stems" type="number" min="0" value="0"></label>
+                    <button class="button button--dark" type="button" id="add-line-button">Agregar</button>
+                  </div>
+                  <p class="inline-error" id="line-error"></p>
+                  <div class="remission-lines" id="remission-lines"></div>
+                </article>
+                <article class="panel form-panel notes-panel"><label>Observaciones<textarea name="notes" rows="3" placeholder="Indicaciones especiales para el despacho"></textarea></label></article>
+              </div>
+              <aside class="order-summary">
+                <div class="summary-head"><span>RESUMEN</span><strong id="summary-count">0 variedades</strong></div>
+                <div class="summary-row"><span>Ramos</span><strong id="summary-bunches">0</strong></div>
+                <div class="summary-row"><span>Tallos</span><strong id="summary-stems">0</strong></div>
+                <div class="summary-total"><span>Total del pedido</span><strong id="summary-total">$ 0</strong></div>
+                <p class="summary-note">Al confirmar, estas cantidades se descontarán inmediatamente del inventario.</p>
+                <p class="form-error" id="remission-error" role="alert"></p>
+                <button class="button button--accent button--wide" type="submit">Confirmar y generar</button>
+                <button class="button button--ghost button--wide" type="button" id="clear-remission">Limpiar formulario</button>
+              </aside>
+            </div>
+          </form>
+        </section>
+
+        <section class="view" id="view-history">
+          <div class="section-heading"><div><h2>Historial de remisiones</h2><p>Consulte y vuelva a imprimir cualquier salida.</p></div></div>
+          <div class="toolbar"><label class="search"><span>⌕</span><input id="history-search" placeholder="Buscar cliente o número de remisión"></label></div>
+          <article class="panel panel--table">
+            <div class="table-wrap"><table><thead><tr><th>Remisión</th><th>Fecha</th><th>Cliente</th><th>Destino</th><th>Total</th><th></th></tr></thead><tbody id="history-body"></tbody></table></div>
+            <div class="empty-state is-hidden" id="history-empty"><strong>No hay remisiones</strong><span>Las salidas confirmadas aparecerán aquí.</span></div>
+          </article>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <dialog id="inventory-dialog">
+    <form method="dialog" class="dialog-card" id="inventory-form">
+      <div class="dialog-head"><div><p class="eyebrow">INVENTARIO</p><h2>Nueva variedad</h2></div><button class="icon-button" value="cancel" aria-label="Cerrar">×</button></div>
+      <div class="form-grid">
+        <label class="span-2">Variedad *<input name="variety" required></label>
+        <label class="span-2">Color<input name="color"></label>
+        <label>Ramos<input name="bunches" type="number" min="0" value="0" required></label>
+        <label>Tallos<input name="stems" type="number" min="0" value="0" required></label>
+        <label>Tallos por ramo<input name="stemsPerBunch" type="number" min="1" value="25" required></label>
+        <span></span>
+        <label>Precio por ramo<input name="pricePerBunch" type="number" min="0" step="0.01" value="0" required></label>
+        <label>Precio por tallo<input name="pricePerStem" type="number" min="0" step="0.01" value="0" required></label>
+      </div>
+      <p class="form-error" id="inventory-error"></p>
+      <div class="dialog-actions"><button class="button button--ghost" value="cancel">Cancelar</button><button class="button button--primary" type="submit" value="default">Guardar variedad</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="adjust-dialog">
+    <form method="dialog" class="dialog-card" id="adjust-form">
+      <div class="dialog-head"><div><p class="eyebrow">AJUSTE MANUAL</p><h2 id="adjust-title">Ajustar existencia</h2></div><button class="icon-button" value="cancel" aria-label="Cerrar">×</button></div>
+      <input type="hidden" name="id">
+      <p class="dialog-copy">Use valores positivos para ingresar flor o negativos para corregir una salida.</p>
+      <div class="form-grid"><label>Cambio en ramos<input name="bunches" type="number" value="0" required></label><label>Cambio en tallos<input name="stems" type="number" value="0" required></label></div>
+      <p class="form-error" id="adjust-error"></p>
+      <div class="dialog-actions"><button class="button button--ghost" value="cancel">Cancelar</button><button class="button button--primary" type="submit" value="default">Aplicar ajuste</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="remission-dialog" class="document-dialog">
+    <div class="document-actions"><button class="button button--ghost" id="close-document">Cerrar</button><button class="button button--primary" id="print-document">Imprimir / Guardar PDF</button></div>
+    <article class="document" id="printable-document"></article>
+  </dialog>
+
+  <div class="toast" id="toast" role="status"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
