@@ -376,7 +376,7 @@ async function assignRemissionItems(id, input) {
     const detailRows = selected.map(({ requested, decoded }, index) => ({ id: index + 1, inventoryId: null, variety: decoded.variety, sourceDate: decoded.sourceDate, gradeCm: decoded.gradeCm, stemsPerBunch: decoded.stemsPerBunch, bunches: requested.bunches, stems: requested.bunches * decoded.stemsPerBunch, unitPriceBunch: 0, unitPriceStem: 0, subtotal: 0 }));
     const bunches = detailRows.reduce((sum, row) => sum + row.bunches, 0);
     const stems = detailRows.reduce((sum, row) => sum + row.stems, 0);
-    if (bunches !== remission.requestedBunches || stems !== remission.requestedStems) throw new Error(`La selección debe sumar exactamente ${bunchText(remission.requestedBunches)} y ${remission.requestedStems} tallos.`);
+    if (bunches > remission.requestedBunches || stems > remission.requestedStems) throw new Error(`La selección no puede superar ${bunchText(remission.requestedBunches)} ni ${remission.requestedStems} tallos.`);
     selected.forEach(({ stock, requested, decoded }) => { stock.bunches -= requested.bunches; stock.stems -= requested.bunches * decoded.stemsPerBunch; });
     remission.items = detailRows; remission.status = 'PENDIENTE_PRECIOS';
     persistMemory();
@@ -403,7 +403,7 @@ async function assignRemissionItems(id, input) {
     const stems = detailRows.reduce((sum, row) => sum + row.stems, 0);
     const expectedBunches = Number(header.rows[0].requested_bunches);
     const expectedStems = Number(header.rows[0].requested_stems);
-    if (bunches !== expectedBunches || stems !== expectedStems) throw new Error(`La selección debe sumar exactamente ${bunchText(expectedBunches)} y ${expectedStems} tallos.`);
+    if (bunches > expectedBunches || stems > expectedStems) throw new Error(`La selección no puede superar ${bunchText(expectedBunches)} ni ${expectedStems} tallos.`);
     const savedItems = [];
     for (const row of detailRows) {
       const saved = await client.query(`INSERT INTO remission_items (remission_id,inventory_id,variety,source_date,grade_cm,stems_per_bunch,bunches,stems,unit_price_bunch,unit_price_stem,subtotal) VALUES ($1,NULL,$2,$3,$4,$5,$6,$7,0,0,0) RETURNING *`, [id, row.variety, row.sourceDate, row.gradeCm, row.stemsPerBunch, row.bunches, row.stems]);

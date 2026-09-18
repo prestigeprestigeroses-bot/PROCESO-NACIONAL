@@ -126,9 +126,9 @@ function renderLines() {
     const remainingStems = remission.requestedStems - stems;
     const exact = remainingBunches === 0 && remainingStems === 0;
     const exceeded = remainingBunches < 0 || remainingStems < 0;
-    const status = exact ? '<b class="selection-ready">✓ Pedido completo</b>' : exceeded ? '<b class="selection-over">La selección supera el pedido</b>' : `<b class="selection-pending">Faltan ${bunchLabel(remainingBunches)} · ${number(remainingStems)} tallos</b>`;
+    const status = exact ? '<b class="selection-ready">✓ Pedido completo</b>' : exceeded ? '<b class="selection-over">La selección supera el pedido</b>' : `<b class="selection-pending">Pedido parcial · Faltan ${bunchLabel(remainingBunches)} · ${number(remainingStems)} tallos</b>`;
     $('#items-step-totals').innerHTML = `<span>Seleccionado: <strong>${bunchLabel(bunches)} · ${number(stems)} tallos</strong></span><span>Pedido: <strong>${bunchLabel(remission.requestedBunches)} · ${number(remission.requestedStems)} tallos</strong></span>${status}`;
-    $('#items-confirm-button').disabled = !exact;
+    $('#items-confirm-button').disabled = !state.lines.length || exceeded;
   }
 }
 
