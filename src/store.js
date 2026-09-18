@@ -6,6 +6,7 @@ const usePostgres = Boolean(process.env.DATABASE_URL);
 const dataDirectory = path.join(process.cwd(), '.data');
 const dataFile = path.join(dataDirectory, 'flor-data.json');
 const allowedGrades = ['BAJAS', 'NACIONAL', 'NACIONAL GRANEL'];
+const businessTimeZone = process.env.BUSINESS_TIMEZONE || 'America/Bogota';
 
 let pool;
 let memory;
@@ -26,6 +27,12 @@ const initialData = () => ({
 function dateOnly(value = new Date()) {
   if (value instanceof Date) return value.toISOString().slice(0, 10);
   return String(value).slice(0, 10);
+}
+
+function businessDateOnly(value = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: businessTimeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(value);
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
 }
 
 function inventoryKey(item) {
@@ -92,6 +99,12 @@ async function init() {
       delivered_by VARCHAR(160) NOT NULL DEFAULT '',
       notes TEXT NOT NULL DEFAULT '',
       total NUMERIC(14,2) NOT NULL DEFAULT 0,
+      status VARCHAR(40) NOT NULL DEFAULT 'FINALIZADA',
+      requested_bunches INTEGER NOT NULL DEFAULT 0,
+      requested_stems INTEGER NOT NULL DEFAULT 0,
+      finalized_at TIMESTAMPTZ,
+      cancellation_reason TEXT NOT NULL DEFAULT '',
+      canceled_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     CREATE TABLE IF NOT EXISTS remission_items (
@@ -113,6 +126,21 @@ async function init() {
     ALTER TABLE remission_items ADD COLUMN IF NOT EXISTS grade_cm VARCHAR(40);
     ALTER TABLE remission_items ADD COLUMN IF NOT EXISTS stems_per_bunch INTEGER;
     ALTER TABLE remissions ADD COLUMN IF NOT EXISTS delivered_by VARCHAR(160) NOT NULL DEFAULT '';
+    ALTER TABLE remissions ADD COLUMN IF NOT EXISTS status VARCHAR(40) NOT NULL DEFAULT 'FINALIZADA';
+    ALTER TABLE remissions ADD COLUMN IF NOT EXISTS requested_bunches INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE remissions ADD COLUMN IF NOT EXISTS requested_stems INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE remissions ADD COLUMN IF NOT EXISTS finalized_at TIMESTAMPTZ;
+    ALTER TABLE remissions ADD COLUMN IF NOT EXISTS cancellation_reason TEXT NOT NULL DEFAULT '';
+    ALTER TABLE remissions ADD COLUMN IF NOT EXISTS canceled_at TIMESTAMPTZ;
+    UPDATE remissions r SET
+      requested_bunches = totals.bunches,
+      requested_stems = totals.stems,
+      finalized_at = COALESCE(r.finalized_at, r.created_at)
+    FROM (
+      SELECT remission_id, COALESCE(SUM(bunches),0)::int AS bunches, COALESCE(SUM(stems),0)::int AS stems
+      FROM remission_items GROUP BY remission_id
+    ) totals
+    WHERE r.id = totals.remission_id AND r.requested_bunches = 0;
     CREATE INDEX IF NOT EXISTS idx_remissions_created_at ON remissions(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_remission_items_source ON remission_items(source_date,variety,grade_cm,stems_per_bunch);
   `);
@@ -156,6 +184,12 @@ function mapRemission(row, items = []) {
     deliveredBy: row.delivered_by ?? row.deliveredBy ?? '',
     notes: row.notes,
     total: Number(row.total),
+    status: row.status || 'FINALIZADA',
+    requestedBunches: Number(row.requested_bunches ?? row.requestedBunches ?? 0),
+    requestedStems: Number(row.requested_stems ?? row.requestedStems ?? 0),
+    finalizedAt: row.finalized_at ?? row.finalizedAt ?? null,
+    cancellationReason: row.cancellation_reason ?? row.cancellationReason ?? '',
+    canceledAt: row.canceled_at ?? row.canceledAt ?? null,
     createdAt: row.created_at ?? row.createdAt,
     items
   };
@@ -186,8 +220,9 @@ async function listInventory() {
       SELECT source_date,variety,grade_cm,stems_per_bunch,
              COALESCE(SUM(bunches),0)::int AS used_bunches,
              COALESCE(SUM(stems),0)::int AS used_stems
-      FROM remission_items
-      WHERE source_date IS NOT NULL
+      FROM remission_items ri
+      JOIN remissions r ON r.id = ri.remission_id
+      WHERE source_date IS NOT NULL AND r.status <> 'ANULADA'
       GROUP BY source_date,variety,grade_cm,stems_per_bunch
     )
     SELECT source.source_date,source.variety,source.grade_cm,source.stems_per_bunch,source.updated_at,
@@ -272,116 +307,179 @@ function cleanRemissionInput(input) {
     clientPhone: '',
     destination: '',
     deliveredBy: String(input.deliveredBy || '').trim(),
-    notes: String(input.notes || '').trim()
+    notes: String(input.notes || '').trim(),
+    requestedBunches: Math.max(0, Number.parseInt(input.requestedBunches, 10) || 0),
+    requestedStems: Math.max(0, Number.parseInt(input.requestedStems, 10) || 0)
   };
   if (!details.clientName) throw new Error('El nombre del cliente es obligatorio.');
   if (!details.deliveredBy) throw new Error('El nombre de quien entrega es obligatorio.');
+  if (!details.requestedBunches) throw new Error('El número de ramos es obligatorio.');
+  if (!details.requestedStems) throw new Error('El número de tallos es obligatorio.');
+  return details;
+}
+
+function cleanVarietyItems(input) {
   const items = (Array.isArray(input.items) ? input.items : [])
-    .map(row => ({ key: String(row.key || row.id || ''), bunches: Math.max(0, Number.parseInt(row.bunches, 10) || 0), unitPriceBunch: Math.max(0, Number(row.unitPriceBunch) || 0) }))
+    .map(row => ({ key: String(row.key || ''), bunches: Math.max(0, Number.parseInt(row.bunches, 10) || 0) }))
     .filter(row => row.key && row.bunches > 0);
   if (!items.length) throw new Error('Agregue al menos una variedad a la remisión.');
   const ids = new Set();
   for (const item of items) {
-    if (item.unitPriceBunch <= 0) throw new Error('Ingrese un precio por ramo mayor que cero.');
     if (ids.has(item.key)) throw new Error('Una variedad está repetida en la remisión.');
     ids.add(item.key);
   }
-  return { details, items };
+  return items;
 }
 
 function nextNumber(sequence, date = new Date()) {
   return `REM-${date.getFullYear()}-${String(sequence).padStart(5, '0')}`;
 }
 
+function bunchText(value) {
+  return `${value} ${Number(value) === 1 ? 'ramo' : 'ramos'}`;
+}
+
 async function createRemission(input) {
-  const { details, items } = cleanRemissionInput(input);
+  const details = cleanRemissionInput(input);
   if (!usePostgres) {
-    const selected = items.map(requested => {
-      const decoded = decodeInventoryKey(requested.key);
-      const stock = memory.inventory.find(row => inventoryKey({ ...row, date: dateOnly(row.date ?? row.updatedAt), gradeCm: row.gradeCm || 'NACIONAL' }) === requested.key);
-      if (!stock) throw new Error('Una de las variedades ya no existe.');
-      if (requested.bunches > stock.bunches) throw new Error(`Stock insuficiente de ${stock.variety}.`);
-      return { stock, requested, decoded };
-    });
-    const remissionItems = selected.map(({ stock, requested, decoded }) => ({
-      inventoryId: null,
-      variety: stock.variety,
-      sourceDate: decoded.sourceDate,
-      gradeCm: decoded.gradeCm,
-      stemsPerBunch: decoded.stemsPerBunch,
-      bunches: requested.bunches,
-      stems: requested.bunches * decoded.stemsPerBunch,
-      unitPriceBunch: requested.unitPriceBunch,
-      unitPriceStem: 0,
-      subtotal: requested.bunches * requested.unitPriceBunch
-    }));
-    const total = remissionItems.reduce((sum, row) => sum + row.subtotal, 0);
     const id = memory.nextRemissionId++;
-    const remission = { id, remissionNumber: nextNumber(id), ...details, total, createdAt: new Date().toISOString(), items: remissionItems };
-    selected.forEach(({ stock, requested, decoded }) => {
-      stock.bunches -= requested.bunches;
-      stock.stems -= requested.bunches * decoded.stemsPerBunch;
-      stock.updatedAt = new Date().toISOString();
-    });
+    const remission = { id, remissionNumber: nextNumber(id), ...details, total: 0, status: 'PENDIENTE_VARIEDADES', finalizedAt: null, createdAt: new Date().toISOString(), items: [] };
     memory.remissions.unshift(remission);
     persistMemory();
     return remission;
   }
+  const sequenceResult = await pool.query("SELECT nextval(pg_get_serial_sequence('remissions','id')) AS id");
+  const id = Number(sequenceResult.rows[0].id);
+  const result = await pool.query(
+    `INSERT INTO remissions (id,remission_number,client_name,client_document,client_phone,destination,delivered_by,notes,total,status,requested_bunches,requested_stems)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,0,'PENDIENTE_VARIEDADES',$9,$10) RETURNING *`,
+    [id, nextNumber(id), details.clientName, details.clientDocument, details.clientPhone, details.destination, details.deliveredBy, details.notes, details.requestedBunches, details.requestedStems]
+  );
+  return mapRemission(result.rows[0]);
+}
 
+async function assignRemissionItems(id, input) {
+  const items = cleanVarietyItems(input);
+  const unlockToday = input.unlockToday === true;
+  const today = businessDateOnly();
+  if (!usePostgres) {
+    const remission = memory.remissions.find(row => row.id === Number(id));
+    if (!remission) throw new Error('Remisión no encontrada.');
+    if (remission.status !== 'PENDIENTE_VARIEDADES') throw new Error('Esta remisión ya no está pendiente de variedades.');
+    const selected = items.map(requested => {
+      const decoded = decodeInventoryKey(requested.key);
+      if (decoded.sourceDate === today && !unlockToday) throw new Error(`La flor ingresada hoy está bloqueada hasta mañana. Use “Desbloquear flor de hoy” solo si es necesario.`);
+      const stock = memory.inventory.find(row => inventoryKey({ ...row, date: dateOnly(row.date ?? row.updatedAt), gradeCm: row.gradeCm || 'NACIONAL' }) === requested.key);
+      if (!stock || requested.bunches > stock.bunches) throw new Error(`Stock insuficiente de ${decoded.variety}.`);
+      return { stock, requested, decoded };
+    });
+    const detailRows = selected.map(({ requested, decoded }, index) => ({ id: index + 1, inventoryId: null, variety: decoded.variety, sourceDate: decoded.sourceDate, gradeCm: decoded.gradeCm, stemsPerBunch: decoded.stemsPerBunch, bunches: requested.bunches, stems: requested.bunches * decoded.stemsPerBunch, unitPriceBunch: 0, unitPriceStem: 0, subtotal: 0 }));
+    const bunches = detailRows.reduce((sum, row) => sum + row.bunches, 0);
+    const stems = detailRows.reduce((sum, row) => sum + row.stems, 0);
+    if (bunches !== remission.requestedBunches || stems !== remission.requestedStems) throw new Error(`La selección debe sumar exactamente ${bunchText(remission.requestedBunches)} y ${remission.requestedStems} tallos.`);
+    selected.forEach(({ stock, requested, decoded }) => { stock.bunches -= requested.bunches; stock.stems -= requested.bunches * decoded.stemsPerBunch; });
+    remission.items = detailRows; remission.status = 'PENDIENTE_PRECIOS';
+    persistMemory();
+    return remission;
+  }
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const inventoryRows = [];
+    const header = await client.query('SELECT * FROM remissions WHERE id=$1 FOR UPDATE', [id]);
+    if (!header.rows[0]) throw new Error('Remisión no encontrada.');
+    if (header.rows[0].status !== 'PENDIENTE_VARIEDADES') throw new Error('Esta remisión ya no está pendiente de variedades.');
+    const detailRows = [];
     for (const requested of items) {
       const selected = decodeInventoryKey(requested.key);
+      if (selected.sourceDate === today && !unlockToday) throw new Error(`La flor ingresada hoy está bloqueada hasta mañana. Use “Desbloquear flor de hoy” solo si es necesario.`);
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [requested.key]);
-      const source = await client.query(
-        `SELECT COUNT(*)::int AS source_bunches
-         FROM public.scans
-         WHERE ts::date=$1::date AND TRIM(variedad_nombre)=$2
-           AND UPPER(TRIM(grado_cm))=$3 AND tallos=$4`,
-        [selected.sourceDate, selected.variety, selected.gradeCm, selected.stemsPerBunch]
-      );
-      const used = await client.query(
-        `SELECT COALESCE(SUM(bunches),0)::int AS used_bunches
-         FROM remission_items
-         WHERE source_date=$1::date AND variety=$2 AND grade_cm=$3 AND stems_per_bunch=$4`,
-        [selected.sourceDate, selected.variety, selected.gradeCm, selected.stemsPerBunch]
-      );
-      const availableBunches = Number(source.rows[0].source_bunches) - Number(used.rows[0].used_bunches);
-      if (requested.bunches > availableBunches) throw new Error(`Stock insuficiente de ${selected.variety}. Quedan ${Math.max(availableBunches, 0)} ramos.`);
-      inventoryRows.push({ stock: { ...selected, bunches: availableBunches }, requested });
+      const source = await client.query(`SELECT COUNT(*)::int AS source_bunches FROM public.scans WHERE ts::date=$1::date AND TRIM(variedad_nombre)=$2 AND UPPER(TRIM(grado_cm))=$3 AND tallos=$4`, [selected.sourceDate, selected.variety, selected.gradeCm, selected.stemsPerBunch]);
+      const used = await client.query(`SELECT COALESCE(SUM(ri.bunches),0)::int AS used_bunches FROM remission_items ri JOIN remissions r ON r.id=ri.remission_id WHERE ri.source_date=$1::date AND ri.variety=$2 AND ri.grade_cm=$3 AND ri.stems_per_bunch=$4 AND r.status <> 'ANULADA'`, [selected.sourceDate, selected.variety, selected.gradeCm, selected.stemsPerBunch]);
+      const available = Number(source.rows[0].source_bunches) - Number(used.rows[0].used_bunches);
+      if (requested.bunches > available) throw new Error(`Stock insuficiente de ${selected.variety}. Quedan ${Math.max(available, 0)} ramos.`);
+      detailRows.push({ ...selected, bunches: requested.bunches, stems: requested.bunches * selected.stemsPerBunch });
     }
-    const sequenceResult = await client.query("SELECT nextval(pg_get_serial_sequence('remissions','id')) AS id");
-    const id = Number(sequenceResult.rows[0].id);
-    const remissionNumber = nextNumber(id);
-    const detailRows = inventoryRows.map(({ stock, requested }) => ({
-      inventoryId: null, variety: stock.variety, sourceDate: stock.sourceDate, gradeCm: stock.gradeCm,
-      stemsPerBunch: stock.stemsPerBunch, bunches: requested.bunches, stems: requested.bunches * stock.stemsPerBunch,
-      unitPriceBunch: requested.unitPriceBunch, unitPriceStem: 0,
-      subtotal: requested.bunches * requested.unitPriceBunch
-    }));
-    const total = detailRows.reduce((sum, row) => sum + row.subtotal, 0);
-    const remissionResult = await client.query(
-      `INSERT INTO remissions (id,remission_number,client_name,client_document,client_phone,destination,delivered_by,notes,total)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-      [id, remissionNumber, details.clientName, details.clientDocument, details.clientPhone, details.destination, details.deliveredBy, details.notes, total]
-    );
+    const bunches = detailRows.reduce((sum, row) => sum + row.bunches, 0);
+    const stems = detailRows.reduce((sum, row) => sum + row.stems, 0);
+    const expectedBunches = Number(header.rows[0].requested_bunches);
+    const expectedStems = Number(header.rows[0].requested_stems);
+    if (bunches !== expectedBunches || stems !== expectedStems) throw new Error(`La selección debe sumar exactamente ${bunchText(expectedBunches)} y ${expectedStems} tallos.`);
+    const savedItems = [];
     for (const row of detailRows) {
-      await client.query(
-        `INSERT INTO remission_items (remission_id,inventory_id,variety,source_date,grade_cm,stems_per_bunch,bunches,stems,unit_price_bunch,unit_price_stem,subtotal)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-        [id, row.inventoryId, row.variety, row.sourceDate, row.gradeCm, row.stemsPerBunch, row.bunches, row.stems, row.unitPriceBunch, row.unitPriceStem, row.subtotal]
-      );
+      const saved = await client.query(`INSERT INTO remission_items (remission_id,inventory_id,variety,source_date,grade_cm,stems_per_bunch,bunches,stems,unit_price_bunch,unit_price_stem,subtotal) VALUES ($1,NULL,$2,$3,$4,$5,$6,$7,0,0,0) RETURNING *`, [id, row.variety, row.sourceDate, row.gradeCm, row.stemsPerBunch, row.bunches, row.stems]);
+      savedItems.push(saved.rows[0]);
     }
+    const updated = await client.query("UPDATE remissions SET status='PENDIENTE_PRECIOS' WHERE id=$1 RETURNING *", [id]);
     await client.query('COMMIT');
-    return mapRemission(remissionResult.rows[0], detailRows);
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
+    return mapRemission(updated.rows[0], savedItems.map(mapRemissionItem));
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
+}
+
+function mapRemissionItem(row) {
+  return { id: Number(row.id), inventoryId: row.inventory_id ? Number(row.inventory_id) : null, variety: row.variety, sourceDate: row.source_date ? dateOnly(row.source_date) : null, gradeCm: row.grade_cm || '', stemsPerBunch: Number(row.stems_per_bunch || 0), bunches: Number(row.bunches), stems: Number(row.stems), unitPriceBunch: Number(row.unit_price_bunch), unitPriceStem: Number(row.unit_price_stem), subtotal: Number(row.subtotal) };
+}
+
+async function setRemissionPrices(id, input) {
+  const prices = new Map((Array.isArray(input.items) ? input.items : []).map(row => [Number(row.id), Number(row.unitPriceBunch)]));
+  if (!usePostgres) {
+    const remission = memory.remissions.find(row => row.id === Number(id));
+    if (!remission) throw new Error('Remisión no encontrada.');
+    if (remission.status !== 'PENDIENTE_PRECIOS') throw new Error('Esta remisión ya no está pendiente de precios.');
+    remission.items.forEach(item => { const price = prices.get(Number(item.id)); if (!(price > 0)) throw new Error('Ingrese un precio por ramo mayor que cero para cada variedad.'); item.unitPriceBunch = price; item.subtotal = item.bunches * price; });
+    remission.total = remission.items.reduce((sum, row) => sum + row.subtotal, 0); remission.status = 'FINALIZADA'; remission.finalizedAt = new Date().toISOString();
+    persistMemory(); return remission;
   }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const header = await client.query('SELECT * FROM remissions WHERE id=$1 FOR UPDATE', [id]);
+    if (!header.rows[0]) throw new Error('Remisión no encontrada.');
+    if (header.rows[0].status !== 'PENDIENTE_PRECIOS') throw new Error('Esta remisión ya no está pendiente de precios.');
+    const details = await client.query('SELECT * FROM remission_items WHERE remission_id=$1 ORDER BY id FOR UPDATE', [id]);
+    if (!details.rows.length) throw new Error('La remisión no tiene variedades asignadas.');
+    let total = 0;
+    for (const row of details.rows) {
+      const price = prices.get(Number(row.id));
+      if (!(price > 0)) throw new Error('Ingrese un precio por ramo mayor que cero para cada variedad.');
+      const subtotal = Number(row.bunches) * price; total += subtotal;
+      await client.query('UPDATE remission_items SET unit_price_bunch=$1, subtotal=$2 WHERE id=$3', [price, subtotal, row.id]);
+    }
+    const updated = await client.query("UPDATE remissions SET total=$1,status='FINALIZADA',finalized_at=NOW() WHERE id=$2 RETURNING *", [total, id]);
+    const finalItems = await client.query('SELECT * FROM remission_items WHERE remission_id=$1 ORDER BY id', [id]);
+    await client.query('COMMIT');
+    return mapRemission(updated.rows[0], finalItems.rows.map(mapRemissionItem));
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
+}
+
+async function cancelRemission(id, input) {
+  const reason = String(input.reason || '').trim();
+  if (!reason) throw new Error('El motivo de anulación es obligatorio.');
+  if (!usePostgres) {
+    const remission = memory.remissions.find(row => row.id === Number(id));
+    if (!remission) throw new Error('Remisión no encontrada.');
+    if (remission.status === 'ANULADA') throw new Error('Esta remisión ya está anulada.');
+    if (Array.isArray(remission.items)) {
+      for (const item of remission.items) {
+        const stock = memory.inventory.find(row => inventoryKey({ ...row, date: dateOnly(row.date ?? row.updatedAt), gradeCm: row.gradeCm || 'NACIONAL' }) === inventoryKey(item));
+        if (stock) { stock.bunches += item.bunches; stock.stems += item.stems; }
+      }
+    }
+    remission.status = 'ANULADA'; remission.cancellationReason = reason; remission.canceledAt = new Date().toISOString();
+    persistMemory(); return remission;
+  }
+  const result = await pool.query(
+    `UPDATE remissions SET status='ANULADA',cancellation_reason=$1,canceled_at=NOW()
+     WHERE id=$2 AND status <> 'ANULADA' RETURNING *`,
+    [reason, id]
+  );
+  if (!result.rows[0]) {
+    const exists = await pool.query('SELECT status FROM remissions WHERE id=$1', [id]);
+    if (!exists.rows[0]) throw new Error('Remisión no encontrada.');
+    throw new Error('Esta remisión ya está anulada.');
+  }
+  return getRemission(id);
 }
 
 async function listRemissions(limit = 100) {
@@ -397,12 +495,7 @@ async function getRemission(id) {
     pool.query('SELECT * FROM remission_items WHERE remission_id=$1 ORDER BY id', [id])
   ]);
   if (!header.rows[0]) return null;
-  const items = details.rows.map(row => ({
-    inventoryId: row.inventory_id ? Number(row.inventory_id) : null, variety: row.variety,
-    sourceDate: row.source_date ? dateOnly(row.source_date) : null, gradeCm: row.grade_cm || '', stemsPerBunch: Number(row.stems_per_bunch || 0),
-    bunches: Number(row.bunches), stems: Number(row.stems),
-    unitPriceBunch: Number(row.unit_price_bunch), unitPriceStem: Number(row.unit_price_stem), subtotal: Number(row.subtotal)
-  }));
+  const items = details.rows.map(mapRemissionItem);
   return mapRemission(header.rows[0], items);
 }
 
@@ -413,11 +506,11 @@ async function dashboard() {
       varieties: new Set(inventory.map(row => row.variety)).size,
       bunches: inventory.reduce((sum, row) => sum + row.bunches, 0),
       stems: inventory.reduce((sum, row) => sum + row.stems, 0),
-      todaySales: remissions.filter(row => new Date(row.createdAt).toDateString() === new Date().toDateString()).reduce((sum, row) => sum + row.total, 0)
+      todaySales: remissions.filter(row => row.status === 'FINALIZADA' && new Date(row.createdAt).toDateString() === new Date().toDateString()).reduce((sum, row) => sum + row.total, 0)
     },
     inventory,
     remissions
   };
 }
 
-module.exports = { init, listInventory, saveInventory, adjustInventory, createRemission, listRemissions, getRemission, dashboard, usePostgres };
+module.exports = { init, listInventory, saveInventory, adjustInventory, createRemission, assignRemissionItems, setRemissionPrices, cancelRemission, listRemissions, getRemission, dashboard, usePostgres };

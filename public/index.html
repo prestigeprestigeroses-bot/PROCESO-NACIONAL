@@ -93,7 +93,7 @@
 
         <section class="view" id="view-new-remission">
           <form id="remission-form">
-            <div class="remission-heading"><div><p class="eyebrow">NUEVO DESPACHO</p><h2>Crear remisión</h2><p>Seleccione el cliente y detalle la flor que va a salir.</p></div><div class="step-chip"><span>1</span> Datos y productos</div></div>
+            <div class="remission-heading"><div><p class="eyebrow">NUEVO DESPACHO</p><h2>Crear pedido</h2><p>Registre únicamente el cliente y la cantidad total solicitada.</p></div><div class="step-chip"><span>1</span> Pedido</div></div>
             <div class="remission-layout">
               <div class="remission-main">
                 <article class="panel form-panel">
@@ -105,26 +105,22 @@
                   </div>
                 </article>
                 <article class="panel form-panel">
-                  <div class="panel-title"><span>02</span><div><h3>Flor a despachar</h3><p>El sistema validará las existencias antes de confirmar.</p></div></div>
-                  <div class="line-add">
-                    <label>Variedad<select id="line-variety"><option value="">Seleccione una variedad</option></select></label>
-                    <label>Ramos<input id="line-bunches" type="number" min="1" value="1"></label>
-                    <label>Precio por ramo<input id="line-price" type="number" min="0" step="0.01" value="0"></label>
-                    <button class="button button--dark" type="button" id="add-line-button">Agregar</button>
+                  <div class="panel-title"><span>02</span><div><h3>Cantidad del pedido</h3><p>En este paso no se seleccionan variedades ni precios.</p></div></div>
+                  <div class="form-grid">
+                    <label>Número de ramos *<input id="requested-bunches" name="requestedBunches" type="number" min="1" placeholder="Ej. 40" required><small class="field-help">Cada ramo se calcula inicialmente con 25 tallos.</small></label>
+                    <label>Número de tallos *<input id="requested-stems" name="requestedStems" type="number" min="1" placeholder="Se calcula automáticamente" required><small class="field-help">Automático, pero puede editarlo para casos especiales.</small></label>
                   </div>
-                  <p class="inline-error" id="line-error"></p>
-                  <div class="remission-lines" id="remission-lines"></div>
                 </article>
                 <article class="panel form-panel notes-panel"><label>Observaciones<textarea name="notes" rows="3" placeholder="Indicaciones especiales para el despacho"></textarea></label></article>
               </div>
               <aside class="order-summary">
-                <div class="summary-head"><span>RESUMEN</span><strong id="summary-count">0 variedades</strong></div>
-                <div class="summary-row"><span>Ramos</span><strong id="summary-bunches">0</strong></div>
-                <div class="summary-row"><span>Tallos</span><strong id="summary-stems">0</strong></div>
-                <div class="summary-total"><span>Total del pedido</span><strong id="summary-total">$ 0</strong></div>
-                <p class="summary-note">Al confirmar, estas cantidades se descontarán inmediatamente del inventario.</p>
+                <div class="summary-head"><span>PROCESO</span><strong>1 de 3</strong></div>
+                <div class="workflow-mini"><b>1</b><span><strong>Crear pedido</strong><small>Ramos y tallos</small></span></div>
+                <div class="workflow-mini"><b>2</b><span><strong>Asignar flor</strong><small>Variedad y grado</small></span></div>
+                <div class="workflow-mini"><b>3</b><span><strong>Finalizar</strong><small>Precios e impresión</small></span></div>
+                <p class="summary-note">El inventario todavía no cambia. Se descontará cuando se confirmen las variedades en el paso 2.</p>
                 <p class="form-error" id="remission-error" role="alert"></p>
-                <button class="button button--accent button--wide" type="submit">Confirmar y generar</button>
+                <button class="button button--accent button--wide" type="submit">Crear pedido</button>
                 <button class="button button--ghost button--wide" type="button" id="clear-remission">Limpiar formulario</button>
               </aside>
             </div>
@@ -132,16 +128,60 @@
         </section>
 
         <section class="view" id="view-history">
-          <div class="section-heading"><div><h2>Historial de remisiones</h2><p>Consulte y vuelva a imprimir cualquier salida.</p></div></div>
+          <div class="section-heading"><div><h2>Control de remisiones</h2><p>Continúe los pedidos pendientes o imprima los finalizados.</p></div></div>
           <div class="toolbar"><label class="search"><span>⌕</span><input id="history-search" placeholder="Buscar cliente o número de remisión"></label></div>
           <article class="panel panel--table">
-            <div class="table-wrap"><table><thead><tr><th>Remisión</th><th>Fecha</th><th>Cliente</th><th>Entregado por</th><th>Total</th><th></th></tr></thead><tbody id="history-body"></tbody></table></div>
-            <div class="empty-state is-hidden" id="history-empty"><strong>No hay remisiones</strong><span>Las salidas confirmadas aparecerán aquí.</span></div>
+            <div class="table-wrap"><table><thead><tr><th>Remisión</th><th>Fecha</th><th>Cliente</th><th>Pedido</th><th>Estado</th><th>Total</th><th></th></tr></thead><tbody id="history-body"></tbody></table></div>
+            <div class="empty-state is-hidden" id="history-empty"><strong>No hay remisiones</strong><span>Los pedidos creados aparecerán aquí.</span></div>
           </article>
         </section>
       </div>
     </main>
   </div>
+
+  <dialog id="items-step-dialog">
+    <form class="dialog-card workflow-dialog" id="items-step-form">
+      <div class="dialog-head"><div><p class="eyebrow">PASO 2 DE 3</p><h2>Asignar variedades y grados</h2><p class="muted" id="items-step-heading"></p></div><button class="icon-button" type="button" data-close-dialog="items-step-dialog">×</button></div>
+      <div class="target-card" id="items-step-target"></div>
+      <div class="step-guide"><span><b>1</b> Filtre el grado</span><span><b>2</b> Seleccione la variedad</span><span><b>3</b> Agregue los ramos</span></div>
+      <div class="step-filter-row">
+        <label>Filtrar por grado<select id="step-grade-filter"><option value="ALL">Todos los grados</option><option value="NACIONAL">Nacional</option><option value="BAJAS">Bajas</option><option value="NACIONAL GRANEL">Nacional granel</option></select></label>
+        <button class="button unlock-button" type="button" id="unlock-today-button"><span>🔒</span> Desbloquear flor de hoy</button>
+      </div>
+      <p class="lock-explanation" id="today-lock-message">La flor recibida hoy se muestra bloqueada y estará disponible automáticamente mañana.</p>
+      <div class="line-add line-add--step">
+        <label>Variedad disponible<select id="line-variety"><option value="">Seleccione una variedad</option></select></label>
+        <label>Ramos a usar<input id="line-bunches" type="number" min="1" value="1"></label>
+        <button class="button button--dark" type="button" id="add-line-button">Agregar</button>
+      </div>
+      <div class="stock-preview" id="line-stock-preview">Seleccione una variedad para ver su fecha, grado y disponibilidad.</div>
+      <p class="inline-error" id="line-error"></p>
+      <div class="remission-lines" id="remission-lines"></div>
+      <div class="step-totals" id="items-step-totals"></div>
+      <p class="form-error" id="items-step-error" role="alert"></p>
+      <div class="dialog-actions"><button class="button button--ghost" type="button" data-close-dialog="items-step-dialog">Cancelar</button><button class="button button--primary" id="items-confirm-button" type="submit" disabled>Confirmar variedades</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="prices-step-dialog">
+    <form class="dialog-card workflow-dialog" id="prices-step-form">
+      <div class="dialog-head"><div><p class="eyebrow">PASO 3 DE 3</p><h2>Ingresar precios</h2><p class="muted" id="prices-step-heading"></p></div><button class="icon-button" type="button" data-close-dialog="prices-step-dialog">×</button></div>
+      <div class="price-lines" id="price-lines"></div>
+      <div class="step-totals"><span>Total de la remisión</span><strong id="prices-total">$ 0</strong></div>
+      <p class="form-error" id="prices-step-error" role="alert"></p>
+      <div class="dialog-actions"><button class="button button--ghost" type="button" data-close-dialog="prices-step-dialog">Cancelar</button><button class="button button--primary" type="submit">Finalizar remisión</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="cancel-remission-dialog">
+    <form class="dialog-card cancel-dialog" id="cancel-remission-form">
+      <div class="dialog-head"><div><p class="eyebrow">ANULAR REMISIÓN</p><h2>Confirmar anulación</h2><p class="muted" id="cancel-remission-heading"></p></div><button class="icon-button" type="button" data-close-dialog="cancel-remission-dialog">×</button></div>
+      <div class="cancel-warning"><strong>La remisión no se borrará.</strong><span>Quedará marcada como anulada y la flor descontada regresará al inventario.</span></div>
+      <label>Motivo de la anulación *<textarea id="cancellation-reason" rows="4" maxlength="500" placeholder="Explique por qué se anula esta remisión" required></textarea></label>
+      <p class="form-error" id="cancel-remission-error" role="alert"></p>
+      <div class="dialog-actions"><button class="button button--ghost" type="button" data-close-dialog="cancel-remission-dialog">Conservar remisión</button><button class="button button--danger" type="submit">Anular remisión</button></div>
+    </form>
+  </dialog>
 
   <dialog id="remission-dialog" class="document-dialog">
     <div class="document-actions"><button class="button button--ghost" id="close-document">Cerrar</button><button class="button button--primary" id="print-document">Imprimir / Guardar PDF</button></div>

@@ -9,9 +9,13 @@ Aplicación web para controlar salidas nacionales de flor. Consulta existencias 
 - Filtro exclusivo para los grados `BAJAS`, `NACIONAL` y `NACIONAL GRANEL`.
 - Número de ramos calculado con `COUNT(*)` y total de tallos con `SUM(tallos)`.
 - Selectores de fecha y grado sincronizados entre Resumen e Inventario.
-- Precio por ramo definido al preparar cada remisión.
+- Flujo compartido en tres pasos: pedido, asignación de variedades/grados y precios/finalización.
 - Creación de remisiones con cliente, NIT/documento, responsable de entrega y observaciones.
-- Validación de existencias y descuento transaccional al confirmar.
+- Estados pendientes visibles para continuar la misma remisión desde otros equipos.
+- Validación de existencias y descuento transaccional al confirmar las variedades en el paso 2.
+- Bloqueo automático de la flor recibida el mismo día, con desbloqueo manual y advertencia para casos excepcionales.
+- Cálculo inicial de 25 tallos por ramo, editable para pedidos especiales.
+- Anulación con motivo obligatorio, conservación del historial y devolución automática de la flor al inventario.
 - Documento A4 listo para imprimir o guardar como PDF, con firma y sello de recibido.
 - Historial de remisiones y reimpresión.
 - Acceso protegido por usuario y contraseña.
