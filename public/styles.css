@@ -28,6 +28,15 @@ button { cursor: pointer; }
 .login-brand h1 { margin: 0; font-family: Manrope, sans-serif; font-size: clamp(3rem, 6vw, 5.9rem); line-height: .98; letter-spacing: -.06em; }
 .brand-mark { width: 42px; height: 42px; border-radius: 13px 13px 13px 3px; display: grid; place-items: center; background: var(--gold); color: var(--green-950); font: 800 1.2rem Manrope, sans-serif; }
 .brand-mark--large { width: 54px; height: 54px; font-size: 1.45rem; }
+.brand-logo { position: relative; display: block; flex: 0 0 auto; overflow: hidden; background: white; }
+.brand-logo img { position: absolute; display: block; max-width: none; height: auto; }
+.brand-logo--large { width: 240px; height: 82px; border-radius: 5px; }
+.brand-logo--large img, .brand-logo--document img { width: 170%; left: 50%; top: 50%; transform: translate(-50%,-50%); }
+.brand-logo--mark { width: 44px; height: 44px; border-radius: 12px 12px 12px 3px; }
+.brand-logo--mark img { width: 540%; left: -335%; top: -220%; }
+.brand-logo--document { width: 155px; height: 54px; border-radius: 3px; }
+.brand-rose-icon { position: relative; width: 46px; height: 46px; display: block; flex: 0 0 auto; overflow: hidden; border-radius: 14px 14px 14px 4px; background: white; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
+.brand-rose-icon img { position: absolute; width: 152%; max-width: none; height: auto; left: -25%; top: -30%; }
 .stem-art { display: flex; gap: 22px; align-items: end; height: 110px; margin-top: 58px; opacity: .65; }
 .stem-art span { display: block; position: relative; width: 2px; height: 85px; background: #a8c5b7; transform: rotate(8deg); }
 .stem-art span::before { content: ""; position: absolute; width: 20px; height: 28px; border-radius: 50% 50% 40% 50%; background: var(--coral); left: -9px; top: -15px; }
