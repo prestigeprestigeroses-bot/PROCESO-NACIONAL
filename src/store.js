@@ -135,6 +135,13 @@ async function init() {
       UNIQUE(client_key,variety,grade_cm)
     );
     ALTER TABLE remission_items ALTER COLUMN inventory_id DROP NOT NULL;
+    ALTER TABLE inventory ADD COLUMN IF NOT EXISTS color VARCHAR(80) NOT NULL DEFAULT '';
+    ALTER TABLE inventory ADD COLUMN IF NOT EXISTS bunches INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE inventory ADD COLUMN IF NOT EXISTS stems INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE inventory ADD COLUMN IF NOT EXISTS stems_per_bunch INTEGER NOT NULL DEFAULT 25;
+    ALTER TABLE inventory ADD COLUMN IF NOT EXISTS price_per_bunch NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE inventory ADD COLUMN IF NOT EXISTS price_per_stem NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE inventory ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
     ALTER TABLE remission_items ADD COLUMN IF NOT EXISTS source_date DATE;
     ALTER TABLE remission_items ADD COLUMN IF NOT EXISTS grade_cm VARCHAR(40);
     ALTER TABLE remission_items ADD COLUMN IF NOT EXISTS stems_per_bunch INTEGER;
@@ -160,7 +167,7 @@ async function init() {
   `);
 
   const countResult = await pool.query('SELECT COUNT(*)::int AS count FROM inventory');
-  const shouldSeedDemo = process.env.SEED_DEMO_DATA === 'true' || process.env.NODE_ENV !== 'production';
+  const shouldSeedDemo = process.env.SEED_DEMO_DATA === 'true';
   if (countResult.rows[0].count === 0 && shouldSeedDemo) {
     const seed = initialData().inventory;
     for (const item of seed) {
