@@ -35,13 +35,20 @@ async function refreshAll() {
   state.inventory = dashboard.inventory;
   state.remissions = dashboard.remissions;
   state.config = config;
-  state.prices = prices;
+  state.prices = normalizePriceList(prices);
   state.totals = dashboard.totals;
   renderDashboard(dashboard.totals);
   renderInventory();
   renderVarietyOptions();
   renderHistory();
   renderPrices();
+}
+
+function normalizePriceList(value) {
+  if (Array.isArray(value)) return value;
+  if (Array.isArray(value?.prices)) return value.prices;
+  if (Array.isArray(value?.data)) return value.data;
+  return [];
 }
 
 function dateFilteredInventory() {
@@ -123,18 +130,20 @@ function clientKey(value) {
 }
 
 function selectedPrice(clientName, variety, gradeCm) {
+  const prices = Array.isArray(state.prices) ? state.prices : [];
   const client = clientKey(clientName);
-  return state.prices.find(row => client && clientKey(row.clientName) === client && clientKey(row.variety) === clientKey(variety) && row.gradeCm === gradeCm)
-    || state.prices.find(row => !row.clientName && clientKey(row.variety) === clientKey(variety) && row.gradeCm === gradeCm);
+  return prices.find(row => client && clientKey(row.clientName) === client && clientKey(row.variety) === clientKey(variety) && row.gradeCm === gradeCm)
+    || prices.find(row => !row.clientName && clientKey(row.variety) === clientKey(variety) && row.gradeCm === gradeCm);
 }
 
 function renderPrices() {
+  const prices = Array.isArray(state.prices) ? state.prices : [];
   $('#price-variety').innerHTML = '<option value="">Seleccione una variedad</option>' + varieties.map(variety => `<option value="${escapeHtml(variety)}">${escapeHtml(variety)}</option>`).join('');
-  const clients = [...new Set(state.prices.map(row => row.clientName).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const clients = [...new Set(prices.map(row => row.clientName).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   $('#known-clients').innerHTML = clients.map(client => `<option value="${escapeHtml(client)}"></option>`).join('');
-  $('#price-count').textContent = `${state.prices.length} ${state.prices.length === 1 ? 'PRECIO' : 'PRECIOS'}`;
-  $('#price-list-body').innerHTML = state.prices.map(row => `<tr><td>${escapeHtml(row.clientName || 'General')}</td><td><strong>${escapeHtml(row.variety)}</strong></td><td><span class="grade-chip">${escapeHtml(row.gradeCm)}</span></td><td class="money"><strong>${money(row.pricePerBunch)}</strong></td><td class="date-cell">${dateTime(row.updatedAt)}</td></tr>`).join('');
-  $('#price-list-empty').classList.toggle('is-hidden', state.prices.length > 0);
+  $('#price-count').textContent = `${prices.length} ${prices.length === 1 ? 'PRECIO' : 'PRECIOS'}`;
+  $('#price-list-body').innerHTML = prices.map(row => `<tr><td>${escapeHtml(row.clientName || 'General')}</td><td><strong>${escapeHtml(row.variety)}</strong></td><td><span class="grade-chip">${escapeHtml(row.gradeCm)}</span></td><td class="money"><strong>${money(row.pricePerBunch)}</strong></td><td class="date-cell">${dateTime(row.updatedAt)}</td></tr>`).join('');
+  $('#price-list-empty').classList.toggle('is-hidden', prices.length > 0);
 }
 
 function switchView(view) {
@@ -296,13 +305,20 @@ $('#remission-form').addEventListener('submit', async event => {
 
 $('#price-form').addEventListener('submit', async event => {
   event.preventDefault();
+  const form = event.currentTarget;
   const button = event.submitter;
   const error = $('#price-error');
   error.textContent = '';
   button.disabled = true;
   try {
-    await api('/api/price-lists', { method: 'PUT', body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget))) });
-    event.currentTarget.reset();
+    const saved = await api('/api/price-lists', { method: 'PUT', body: JSON.stringify(Object.fromEntries(new FormData(form))) });
+    const savedPrice = saved?.price || saved?.data || saved;
+    if (savedPrice && savedPrice.variety && savedPrice.gradeCm) {
+      const samePrice = row => clientKey(row.clientName) === clientKey(savedPrice.clientName) && clientKey(row.variety) === clientKey(savedPrice.variety) && row.gradeCm === savedPrice.gradeCm;
+      state.prices = [...state.prices.filter(row => !samePrice(row)), savedPrice];
+      renderPrices();
+    }
+    form.reset();
     await refreshAll();
     toast('Precio guardado. Las próximas remisiones usarán este valor.');
   } catch (requestError) { error.textContent = requestError.message; }
