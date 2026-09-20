@@ -221,7 +221,7 @@ async function listInventory() {
     return [...memory.inventory].map(item => {
       const normalized = { ...item, date: dateOnly(item.date ?? item.updatedAt), gradeCm: item.gradeCm || 'NACIONAL' };
       return { ...normalized, id: inventoryKey(normalized), key: inventoryKey(normalized) };
-    }).sort((a, b) => b.date.localeCompare(a.date) || a.variety.localeCompare(b.variety));
+    }).filter(item => item.date >= dateOnly()).sort((a, b) => b.date.localeCompare(a.date) || a.variety.localeCompare(b.variety));
   }
   const result = await pool.query(`
     WITH source AS (
@@ -234,6 +234,7 @@ async function listInventory() {
              MAX(ts) AS updated_at
       FROM public.scans
       WHERE UPPER(TRIM(grado_cm)) = ANY($1::text[])
+        AND ts::date >= CURRENT_DATE
         AND variedad_nombre IS NOT NULL AND TRIM(variedad_nombre) <> ''
         AND tallos IS NOT NULL AND tallos > 0
       GROUP BY ts::date,TRIM(variedad_nombre),UPPER(TRIM(grado_cm)),tallos
