@@ -6,7 +6,6 @@ const usePostgres = Boolean(process.env.DATABASE_URL);
 const dataDirectory = path.join(process.cwd(), '.data');
 const dataFile = path.join(dataDirectory, 'flor-data.json');
 const allowedGrades = ['BAJAS', 'NACIONAL', 'NACIONAL GRANEL'];
-const businessTimeZone = process.env.BUSINESS_TIMEZONE || 'America/Bogota';
 
 let pool;
 let memory;
@@ -21,18 +20,20 @@ const initialData = () => ({
     { id: 4, variety: 'Pink Floyd', color: 'Rosado', bunches: 37, stems: 925, stemsPerBunch: 25, pricePerBunch: 22.5, pricePerStem: 0.9, updatedAt: new Date().toISOString() },
     { id: 5, variety: 'Tibet', color: 'Blanco', bunches: 29, stems: 725, stemsPerBunch: 25, pricePerBunch: 19.75, pricePerStem: 0.79, updatedAt: new Date().toISOString() }
   ],
-  remissions: []
+  remissions: [],
+  nextPriceListId: 1,
+  priceLists: []
 });
+
+const generalPriceKey = '__GENERAL__';
+
+function normalizedText(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toUpperCase();
+}
 
 function dateOnly(value = new Date()) {
   if (value instanceof Date) return value.toISOString().slice(0, 10);
   return String(value).slice(0, 10);
-}
-
-function businessDateOnly(value = new Date()) {
-  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: businessTimeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(value);
-  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
 }
 
 function inventoryKey(item) {
@@ -65,6 +66,8 @@ async function init() {
   if (!usePostgres) {
     if (fs.existsSync(dataFile)) {
       memory = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
+      memory.priceLists ||= [];
+      memory.nextPriceListId ||= 1;
     } else {
       memory = initialData();
       persistMemory();
@@ -121,6 +124,16 @@ async function init() {
       unit_price_stem NUMERIC(12,2) NOT NULL DEFAULT 0,
       subtotal NUMERIC(14,2) NOT NULL DEFAULT 0
     );
+    CREATE TABLE IF NOT EXISTS price_lists (
+      id BIGSERIAL PRIMARY KEY,
+      client_name VARCHAR(160) NOT NULL DEFAULT '',
+      client_key VARCHAR(160) NOT NULL,
+      variety VARCHAR(120) NOT NULL,
+      grade_cm VARCHAR(40) NOT NULL,
+      price_per_bunch NUMERIC(12,2) NOT NULL CHECK (price_per_bunch > 0),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(client_key,variety,grade_cm)
+    );
     ALTER TABLE remission_items ALTER COLUMN inventory_id DROP NOT NULL;
     ALTER TABLE remission_items ADD COLUMN IF NOT EXISTS source_date DATE;
     ALTER TABLE remission_items ADD COLUMN IF NOT EXISTS grade_cm VARCHAR(40);
@@ -143,6 +156,7 @@ async function init() {
     WHERE r.id = totals.remission_id AND r.requested_bunches = 0;
     CREATE INDEX IF NOT EXISTS idx_remissions_created_at ON remissions(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_remission_items_source ON remission_items(source_date,variety,grade_cm,stems_per_bunch);
+    CREATE INDEX IF NOT EXISTS idx_price_lists_lookup ON price_lists(client_key,variety,grade_cm);
   `);
 
   const countResult = await pool.query('SELECT COUNT(*)::int AS count FROM inventory');
@@ -307,15 +321,77 @@ function cleanRemissionInput(input) {
     clientPhone: '',
     destination: '',
     deliveredBy: String(input.deliveredBy || '').trim(),
-    notes: String(input.notes || '').trim(),
-    requestedBunches: Math.max(0, Number.parseInt(input.requestedBunches, 10) || 0),
-    requestedStems: Math.max(0, Number.parseInt(input.requestedStems, 10) || 0)
+    notes: String(input.notes || '').trim()
   };
   if (!details.clientName) throw new Error('El nombre del cliente es obligatorio.');
   if (!details.deliveredBy) throw new Error('El nombre de quien entrega es obligatorio.');
-  if (!details.requestedBunches) throw new Error('El número de ramos es obligatorio.');
-  if (!details.requestedStems) throw new Error('El número de tallos es obligatorio.');
-  return details;
+  const items = (Array.isArray(input.items) ? input.items : [])
+    .map(row => ({
+      key: String(row.key || ''),
+      bunches: Math.max(0, Number.parseInt(row.bunches, 10) || 0)
+    }))
+    .filter(row => row.key && row.bunches > 0);
+  if (!items.length) throw new Error('Agregue al menos una variedad a la remisión.');
+  const keys = new Set();
+  for (const item of items) {
+    if (keys.has(item.key)) throw new Error('Una variedad está repetida en la remisión.');
+    keys.add(item.key);
+  }
+  return { details, items };
+}
+
+function cleanPriceInput(input) {
+  const clientName = String(input.clientName || '').trim();
+  const variety = String(input.variety || '').trim();
+  const gradeCm = normalizedText(input.gradeCm);
+  const pricePerBunch = Number(input.pricePerBunch);
+  if (!variety) throw new Error('Seleccione una variedad.');
+  if (!allowedGrades.includes(gradeCm)) throw new Error('Seleccione un grado válido.');
+  if (!(pricePerBunch > 0)) throw new Error('Ingrese un precio por ramo mayor que cero.');
+  return { clientName, clientKey: clientName ? normalizedText(clientName) : generalPriceKey, variety, gradeCm, pricePerBunch };
+}
+
+function mapPriceList(row) {
+  return {
+    id: Number(row.id),
+    clientName: row.client_name ?? row.clientName ?? '',
+    variety: row.variety,
+    gradeCm: row.grade_cm ?? row.gradeCm,
+    pricePerBunch: Number(row.price_per_bunch ?? row.pricePerBunch),
+    updatedAt: row.updated_at ?? row.updatedAt
+  };
+}
+
+async function listPriceLists() {
+  if (!usePostgres) return [...memory.priceLists].map(mapPriceList).sort((a, b) => a.clientName.localeCompare(b.clientName) || a.variety.localeCompare(b.variety) || a.gradeCm.localeCompare(b.gradeCm));
+  const result = await pool.query('SELECT * FROM price_lists ORDER BY client_name,variety,grade_cm');
+  return result.rows.map(mapPriceList);
+}
+
+async function savePriceList(input) {
+  const clean = cleanPriceInput(input);
+  if (!usePostgres) {
+    const existing = memory.priceLists.find(row => row.clientKey === clean.clientKey && normalizedText(row.variety) === normalizedText(clean.variety) && row.gradeCm === clean.gradeCm);
+    const now = new Date().toISOString();
+    if (existing) Object.assign(existing, clean, { updatedAt: now });
+    else memory.priceLists.push({ id: memory.nextPriceListId++, ...clean, updatedAt: now });
+    persistMemory();
+    return mapPriceList(existing || memory.priceLists.at(-1));
+  }
+  const result = await pool.query(
+    `INSERT INTO price_lists (client_name,client_key,variety,grade_cm,price_per_bunch)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (client_key,variety,grade_cm) DO UPDATE SET client_name=EXCLUDED.client_name,price_per_bunch=EXCLUDED.price_per_bunch,updated_at=NOW()
+     RETURNING *`,
+    [clean.clientName, clean.clientKey, clean.variety, clean.gradeCm, clean.pricePerBunch]
+  );
+  return mapPriceList(result.rows[0]);
+}
+
+function resolveMemoryPrice(clientName, variety, gradeCm) {
+  const clientKey = normalizedText(clientName);
+  return memory.priceLists.find(row => row.clientKey === clientKey && normalizedText(row.variety) === normalizedText(variety) && row.gradeCm === gradeCm)
+    || memory.priceLists.find(row => row.clientKey === generalPriceKey && normalizedText(row.variety) === normalizedText(variety) && row.gradeCm === gradeCm);
 }
 
 function cleanVarietyItems(input) {
@@ -340,35 +416,90 @@ function bunchText(value) {
 }
 
 async function createRemission(input) {
-  const details = cleanRemissionInput(input);
+  const { details, items } = cleanRemissionInput(input);
   if (!usePostgres) {
+    const selected = items.map(requested => {
+      const decoded = decodeInventoryKey(requested.key);
+      const stock = memory.inventory.find(row => inventoryKey({ ...row, date: dateOnly(row.date ?? row.updatedAt), gradeCm: row.gradeCm || 'NACIONAL' }) === requested.key);
+      if (!stock || requested.bunches > stock.bunches) throw new Error(`Stock insuficiente de ${decoded.variety}.`);
+      return { stock, requested, decoded };
+    });
+    const detailRows = selected.map(({ requested, decoded }, index) => {
+      const price = resolveMemoryPrice(details.clientName, decoded.variety, decoded.gradeCm);
+      if (!price) throw new Error(`No hay precio configurado para ${decoded.variety} · ${decoded.gradeCm}. Regístrelo en Lista de precios.`);
+      const unitPriceBunch = Number(price.pricePerBunch);
+      return {
+        id: index + 1, inventoryId: null, variety: decoded.variety, sourceDate: decoded.sourceDate,
+        gradeCm: decoded.gradeCm, stemsPerBunch: decoded.stemsPerBunch, bunches: requested.bunches,
+        stems: requested.bunches * decoded.stemsPerBunch, unitPriceBunch,
+        unitPriceStem: 0, subtotal: requested.bunches * unitPriceBunch
+      };
+    });
+    const requestedBunches = detailRows.reduce((sum, row) => sum + row.bunches, 0);
+    const requestedStems = detailRows.reduce((sum, row) => sum + row.stems, 0);
+    const total = detailRows.reduce((sum, row) => sum + row.subtotal, 0);
     const id = memory.nextRemissionId++;
-    const remission = { id, remissionNumber: nextNumber(id), ...details, total: 0, status: 'PENDIENTE_VARIEDADES', finalizedAt: null, createdAt: new Date().toISOString(), items: [] };
+    const now = new Date().toISOString();
+    const remission = { id, remissionNumber: nextNumber(id), ...details, requestedBunches, requestedStems, total, status: 'FINALIZADA', finalizedAt: now, createdAt: now, items: detailRows };
+    selected.forEach(({ stock, requested, decoded }) => { stock.bunches -= requested.bunches; stock.stems -= requested.bunches * decoded.stemsPerBunch; });
     memory.remissions.unshift(remission);
     persistMemory();
     return remission;
   }
-  const sequenceResult = await pool.query("SELECT nextval(pg_get_serial_sequence('remissions','id')) AS id");
-  const id = Number(sequenceResult.rows[0].id);
-  const result = await pool.query(
-    `INSERT INTO remissions (id,remission_number,client_name,client_document,client_phone,destination,delivered_by,notes,total,status,requested_bunches,requested_stems)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,0,'PENDIENTE_VARIEDADES',$9,$10) RETURNING *`,
-    [id, nextNumber(id), details.clientName, details.clientDocument, details.clientPhone, details.destination, details.deliveredBy, details.notes, details.requestedBunches, details.requestedStems]
-  );
-  return mapRemission(result.rows[0]);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const detailRows = [];
+    for (const requested of items) {
+      const selected = decodeInventoryKey(requested.key);
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [requested.key]);
+      const source = await client.query(`SELECT COUNT(*)::int AS source_bunches FROM public.scans WHERE ts::date=$1::date AND TRIM(variedad_nombre)=$2 AND UPPER(TRIM(grado_cm))=$3 AND tallos=$4`, [selected.sourceDate, selected.variety, selected.gradeCm, selected.stemsPerBunch]);
+      const used = await client.query(`SELECT COALESCE(SUM(ri.bunches),0)::int AS used_bunches FROM remission_items ri JOIN remissions r ON r.id=ri.remission_id WHERE ri.source_date=$1::date AND ri.variety=$2 AND ri.grade_cm=$3 AND ri.stems_per_bunch=$4 AND r.status <> 'ANULADA'`, [selected.sourceDate, selected.variety, selected.gradeCm, selected.stemsPerBunch]);
+      const available = Number(source.rows[0].source_bunches) - Number(used.rows[0].used_bunches);
+      if (requested.bunches > available) throw new Error(`Stock insuficiente de ${selected.variety}. Quedan ${Math.max(available, 0)} ramos.`);
+      const priceResult = await client.query(
+        `SELECT price_per_bunch FROM price_lists
+         WHERE UPPER(TRIM(variety))=UPPER(TRIM($1)) AND grade_cm=$2 AND client_key = ANY($3::text[])
+         ORDER BY CASE WHEN client_key=$4 THEN 0 ELSE 1 END LIMIT 1`,
+        [selected.variety, selected.gradeCm, [normalizedText(details.clientName), generalPriceKey], normalizedText(details.clientName)]
+      );
+      if (!priceResult.rows[0]) throw new Error(`No hay precio configurado para ${selected.variety} · ${selected.gradeCm}. Regístrelo en Lista de precios.`);
+      const unitPriceBunch = Number(priceResult.rows[0].price_per_bunch);
+      detailRows.push({ ...selected, bunches: requested.bunches, stems: requested.bunches * selected.stemsPerBunch, unitPriceBunch, subtotal: requested.bunches * unitPriceBunch });
+    }
+    const requestedBunches = detailRows.reduce((sum, row) => sum + row.bunches, 0);
+    const requestedStems = detailRows.reduce((sum, row) => sum + row.stems, 0);
+    const total = detailRows.reduce((sum, row) => sum + row.subtotal, 0);
+    const sequenceResult = await client.query("SELECT nextval(pg_get_serial_sequence('remissions','id')) AS id");
+    const id = Number(sequenceResult.rows[0].id);
+    const header = await client.query(
+      `INSERT INTO remissions (id,remission_number,client_name,client_document,client_phone,destination,delivered_by,notes,total,status,requested_bunches,requested_stems,finalized_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'FINALIZADA',$10,$11,NOW()) RETURNING *`,
+      [id, nextNumber(id), details.clientName, details.clientDocument, details.clientPhone, details.destination, details.deliveredBy, details.notes, total, requestedBunches, requestedStems]
+    );
+    const savedItems = [];
+    for (const row of detailRows) {
+      const saved = await client.query(
+        `INSERT INTO remission_items (remission_id,inventory_id,variety,source_date,grade_cm,stems_per_bunch,bunches,stems,unit_price_bunch,unit_price_stem,subtotal)
+         VALUES ($1,NULL,$2,$3,$4,$5,$6,$7,$8,0,$9) RETURNING *`,
+        [id, row.variety, row.sourceDate, row.gradeCm, row.stemsPerBunch, row.bunches, row.stems, row.unitPriceBunch, row.subtotal]
+      );
+      savedItems.push(saved.rows[0]);
+    }
+    await client.query('COMMIT');
+    return mapRemission(header.rows[0], savedItems.map(mapRemissionItem));
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
 }
 
 async function assignRemissionItems(id, input) {
   const items = cleanVarietyItems(input);
-  const unlockToday = input.unlockToday === true;
-  const today = businessDateOnly();
   if (!usePostgres) {
     const remission = memory.remissions.find(row => row.id === Number(id));
     if (!remission) throw new Error('Remisión no encontrada.');
     if (remission.status !== 'PENDIENTE_VARIEDADES') throw new Error('Esta remisión ya no está pendiente de variedades.');
     const selected = items.map(requested => {
       const decoded = decodeInventoryKey(requested.key);
-      if (decoded.sourceDate === today && !unlockToday) throw new Error(`La flor ingresada hoy está bloqueada hasta mañana. Use “Desbloquear flor de hoy” solo si es necesario.`);
       const stock = memory.inventory.find(row => inventoryKey({ ...row, date: dateOnly(row.date ?? row.updatedAt), gradeCm: row.gradeCm || 'NACIONAL' }) === requested.key);
       if (!stock || requested.bunches > stock.bunches) throw new Error(`Stock insuficiente de ${decoded.variety}.`);
       return { stock, requested, decoded };
@@ -391,7 +522,6 @@ async function assignRemissionItems(id, input) {
     const detailRows = [];
     for (const requested of items) {
       const selected = decodeInventoryKey(requested.key);
-      if (selected.sourceDate === today && !unlockToday) throw new Error(`La flor ingresada hoy está bloqueada hasta mañana. Use “Desbloquear flor de hoy” solo si es necesario.`);
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [requested.key]);
       const source = await client.query(`SELECT COUNT(*)::int AS source_bunches FROM public.scans WHERE ts::date=$1::date AND TRIM(variedad_nombre)=$2 AND UPPER(TRIM(grado_cm))=$3 AND tallos=$4`, [selected.sourceDate, selected.variety, selected.gradeCm, selected.stemsPerBunch]);
       const used = await client.query(`SELECT COALESCE(SUM(ri.bunches),0)::int AS used_bunches FROM remission_items ri JOIN remissions r ON r.id=ri.remission_id WHERE ri.source_date=$1::date AND ri.variety=$2 AND ri.grade_cm=$3 AND ri.stems_per_bunch=$4 AND r.status <> 'ANULADA'`, [selected.sourceDate, selected.variety, selected.gradeCm, selected.stemsPerBunch]);
@@ -513,4 +643,4 @@ async function dashboard() {
   };
 }
 
-module.exports = { init, listInventory, saveInventory, adjustInventory, createRemission, assignRemissionItems, setRemissionPrices, cancelRemission, listRemissions, getRemission, dashboard, usePostgres };
+module.exports = { init, listInventory, saveInventory, adjustInventory, listPriceLists, savePriceList, createRemission, assignRemissionItems, setRemissionPrices, cancelRemission, listRemissions, getRemission, dashboard, usePostgres };

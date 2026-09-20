@@ -1,4 +1,5 @@
-const state = { inventory: [], remissions: [], lines: [], activeRemission: null, unlockToday: false, stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
+const varieties = ['FREEDOM', 'PINK FLOYD', 'MONDIAL', 'HUMMER', 'MOMENTUM', 'CORAL REEF', 'QUICK SAND', 'HILUX', 'CANDLELIGHT', 'DEEP PURPLE', 'SUMMERSAND', 'STAR PLATINUM', 'SHIMMER', 'PINK OHARA', 'WHITE OHARA', 'PINK MONDIAL', 'BLESSING', 'PINK AMARETO', 'TIFFANY', 'YELLOW BIKINI', 'QUEEN BERRY', 'MOODY BLUE', 'SWAN', 'HIGH MAGIC', 'EXPLORER', 'DANCING RED'];
+const state = { inventory: [], remissions: [], prices: [], lines: [], activeRemission: null, stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const money = value => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -8,8 +9,6 @@ const shortDate = value => new Intl.DateTimeFormat('es-CO', { dateStyle: 'medium
 const dateTime = value => new Intl.DateTimeFormat('es-CO', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
 const inventoryDate = value => new Intl.DateTimeFormat('es-CO', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' }).format(new Date(`${value}T12:00:00Z`));
 const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
-const businessDate = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-const isTodayInventory = item => item.date === businessDate();
 
 async function api(url, options = {}) {
   const response = await fetch(url, { headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }, ...options });
@@ -32,15 +31,17 @@ async function showApp() {
 }
 
 async function refreshAll() {
-  const [dashboard, config] = await Promise.all([api('/api/dashboard'), api('/api/config')]);
+  const [dashboard, config, prices] = await Promise.all([api('/api/dashboard'), api('/api/config'), api('/api/price-lists')]);
   state.inventory = dashboard.inventory;
   state.remissions = dashboard.remissions;
   state.config = config;
+  state.prices = prices;
   state.totals = dashboard.totals;
   renderDashboard(dashboard.totals);
   renderInventory();
   renderVarietyOptions();
   renderHistory();
+  renderPrices();
 }
 
 function dateFilteredInventory() {
@@ -58,7 +59,7 @@ function renderDashboard(totals = state.totals) {
   $('#metric-stems').textContent = number(visibleInventory.reduce((sum, item) => sum + item.stems, 0));
   $('#metric-sales').textContent = money(totals.todaySales);
   $('#dashboard-inventory').innerHTML = visibleInventory.slice(0, 7).map(item => `<tr>
-    <td class="date-cell">${inventoryDate(item.date)} ${isTodayInventory(item) ? '<span class="inventory-lock">🔒 Disponible mañana</span>' : ''}</td><td><div class="variety-cell">${escapeHtml(item.variety)}</div></td>
+    <td class="date-cell">${inventoryDate(item.date)}</td><td><div class="variety-cell">${escapeHtml(item.variety)}</div></td>
     <td><span class="grade-chip">${escapeHtml(item.gradeCm)}</span></td><td class="quantity">${number(item.stemsPerBunch)}</td>
     <td class="quantity">${number(item.bunches)}</td><td class="quantity">${number(item.stems)}</td>
   </tr>`).join('') || '<tr><td colspan="6">No hay registros BAJAS, NACIONAL o NACIONAL GRANEL disponibles.</td></tr>';
@@ -71,7 +72,7 @@ function renderInventory() {
   const query = ($('#inventory-search').value || '').toLowerCase();
   const rows = dateFilteredInventory().filter(item => `${item.date} ${item.variety} ${item.gradeCm}`.toLowerCase().includes(query));
   $('#inventory-body').innerHTML = rows.map(item => `<tr>
-    <td class="date-cell">${inventoryDate(item.date)} ${isTodayInventory(item) ? '<span class="inventory-lock">🔒 Disponible mañana</span>' : ''}</td><td><div class="variety-cell">${escapeHtml(item.variety)}</div></td>
+    <td class="date-cell">${inventoryDate(item.date)}</td><td><div class="variety-cell">${escapeHtml(item.variety)}</div></td>
     <td><span class="grade-chip">${escapeHtml(item.gradeCm)}</span></td><td class="quantity">${number(item.stemsPerBunch)}</td>
     <td class="quantity">${number(item.bunches)}</td><td class="quantity">${number(item.stems)}</td>
   </tr>`).join('');
@@ -81,25 +82,16 @@ function renderInventory() {
 
 function renderVarietyOptions() {
   const rows = state.inventory.filter(item => state.stepGrade === 'ALL' || item.gradeCm === state.stepGrade);
-  $('#line-variety').innerHTML = '<option value="">Seleccione una variedad</option>' + rows.map(item => {
-    const locked = isTodayInventory(item) && !state.unlockToday;
-    return `<option value="${item.key}" ${locked ? 'disabled' : ''}>${locked ? '🔒 HOY · ' : ''}${escapeHtml(item.variety)} · ${escapeHtml(item.gradeCm)} · ${inventoryDate(item.date)} · ${item.bunches} ${item.bunches === 1 ? 'ramo disponible' : 'ramos disponibles'}</option>`;
-  }).join('') + (rows.length ? '' : '<option disabled>Sin inventario para este grado</option>');
+  $('#line-variety').innerHTML = '<option value="">Seleccione una variedad</option>' + rows.map(item => `<option value="${item.key}">${escapeHtml(item.variety)} · ${escapeHtml(item.gradeCm)} · ${inventoryDate(item.date)} · ${item.bunches} ${item.bunches === 1 ? 'ramo disponible' : 'ramos disponibles'}</option>`).join('') + (rows.length ? '' : '<option disabled>Sin inventario para este grado</option>');
   renderStockPreview();
 }
 
 function renderStockPreview() {
   const item = state.inventory.find(row => row.key === $('#line-variety').value);
   if (!item) return $('#line-stock-preview').textContent = 'Seleccione una variedad para ver su fecha, grado y disponibilidad.';
-  $('#line-stock-preview').innerHTML = `<strong>${escapeHtml(item.variety)}</strong><span>${escapeHtml(item.gradeCm)} · ${inventoryDate(item.date)} · ${number(item.stemsPerBunch)} tallos por ramo · <b>${number(item.bunches)} ramos disponibles</b></span>`;
-}
-
-function renderTodayUnlock() {
-  const button = $('#unlock-today-button');
-  button.classList.toggle('is-unlocked', state.unlockToday);
-  button.innerHTML = state.unlockToday ? '<span>🔓</span> Flor de hoy desbloqueada' : '<span>🔒</span> Desbloquear flor de hoy';
-  $('#today-lock-message').textContent = state.unlockToday ? 'Desbloqueo especial activo: podrá seleccionar flor recibida hoy.' : 'La flor recibida hoy se muestra bloqueada y estará disponible automáticamente mañana.';
-  renderVarietyOptions();
+  const price = selectedPrice($('#remission-client-name').value, item.variety, item.gradeCm);
+  const priceText = price ? ` · <b>Precio: ${money(price.pricePerBunch)}</b>` : ' · <b class="selection-over">Sin precio configurado</b>';
+  $('#line-stock-preview').innerHTML = `<strong>${escapeHtml(item.variety)}</strong><span>${escapeHtml(item.gradeCm)} · ${inventoryDate(item.date)} · ${number(item.stemsPerBunch)} tallos por ramo · <b>${number(item.bunches)} ramos disponibles</b>${priceText}</span>`;
 }
 
 function renderHistory() {
@@ -110,33 +102,46 @@ function renderHistory() {
 }
 
 function statusMeta(status) {
-  if (status === 'PENDIENTE_VARIEDADES') return { label: 'Paso 2 · Variedades', button: 'Asignar variedades', action: 'items', kind: 'pending' };
-  if (status === 'PENDIENTE_PRECIOS') return { label: 'Paso 3 · Precios', button: 'Ingresar precios', action: 'prices', kind: 'pricing' };
+  if (status === 'PENDIENTE_VARIEDADES' || status === 'PENDIENTE_PRECIOS') return { label: 'Pendiente anterior', button: 'Ver detalle', action: 'view', kind: 'pending' };
   if (status === 'ANULADA') return { label: 'Anulada', button: 'Ver detalle', action: 'view', kind: 'canceled' };
   return { label: 'Finalizada', button: 'Ver / Imprimir', action: 'view', kind: 'done' };
 }
 
 function renderLines() {
-  $('#remission-lines').innerHTML = state.lines.map(line => `<div class="line-item line-item--step"><strong>${escapeHtml(line.variety)}</strong><span>${escapeHtml(line.gradeCm)} · ${inventoryDate(line.date)}${isTodayInventory(line) ? ' · 🔓 Hoy' : ''}</span><span>${line.bunches} ramos</span><span>${line.stems} tallos</span><button type="button" class="remove-line" data-remove-line="${line.key}" aria-label="Quitar ${escapeHtml(line.variety)}">×</button></div>`).join('');
+  $('#remission-lines').innerHTML = state.lines.map(line => `<div class="line-item line-item--complete"><strong>${escapeHtml(line.variety)}</strong><span>${escapeHtml(line.gradeCm)} · ${inventoryDate(line.date)}</span><span>${bunchLabel(line.bunches)}</span><span>${number(line.stems)} tallos</span><b>${money(line.subtotal)}</b><button type="button" class="remove-line" data-remove-line="${line.key}" aria-label="Quitar ${escapeHtml(line.variety)}">×</button></div>`).join('');
   const bunches = state.lines.reduce((sum, row) => sum + row.bunches, 0);
   const stems = state.lines.reduce((sum, row) => sum + row.stems, 0);
-  const remission = state.activeRemission;
-  if (remission) {
-    const remainingBunches = remission.requestedBunches - bunches;
-    const remainingStems = remission.requestedStems - stems;
-    const exact = remainingBunches === 0 && remainingStems === 0;
-    const exceeded = remainingBunches < 0 || remainingStems < 0;
-    const status = exact ? '<b class="selection-ready">✓ Pedido completo</b>' : exceeded ? '<b class="selection-over">La selección supera el pedido</b>' : `<b class="selection-pending">Pedido parcial · Faltan ${bunchLabel(remainingBunches)} · ${number(remainingStems)} tallos</b>`;
-    $('#items-step-totals').innerHTML = `<span>Seleccionado: <strong>${bunchLabel(bunches)} · ${number(stems)} tallos</strong></span><span>Pedido: <strong>${bunchLabel(remission.requestedBunches)} · ${number(remission.requestedStems)} tallos</strong></span>${status}`;
-    $('#items-confirm-button').disabled = !state.lines.length || exceeded;
-  }
+  const total = state.lines.reduce((sum, row) => sum + row.subtotal, 0);
+  $('#summary-count').textContent = `${state.lines.length} ${state.lines.length === 1 ? 'variedad' : 'variedades'}`;
+  $('#summary-bunches').textContent = number(bunches);
+  $('#summary-stems').textContent = number(stems);
+  $('#summary-total').textContent = money(total);
+}
+
+function clientKey(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toUpperCase();
+}
+
+function selectedPrice(clientName, variety, gradeCm) {
+  const client = clientKey(clientName);
+  return state.prices.find(row => client && clientKey(row.clientName) === client && clientKey(row.variety) === clientKey(variety) && row.gradeCm === gradeCm)
+    || state.prices.find(row => !row.clientName && clientKey(row.variety) === clientKey(variety) && row.gradeCm === gradeCm);
+}
+
+function renderPrices() {
+  $('#price-variety').innerHTML = '<option value="">Seleccione una variedad</option>' + varieties.map(variety => `<option value="${escapeHtml(variety)}">${escapeHtml(variety)}</option>`).join('');
+  const clients = [...new Set(state.prices.map(row => row.clientName).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  $('#known-clients').innerHTML = clients.map(client => `<option value="${escapeHtml(client)}"></option>`).join('');
+  $('#price-count').textContent = `${state.prices.length} ${state.prices.length === 1 ? 'PRECIO' : 'PRECIOS'}`;
+  $('#price-list-body').innerHTML = state.prices.map(row => `<tr><td>${escapeHtml(row.clientName || 'General')}</td><td><strong>${escapeHtml(row.variety)}</strong></td><td><span class="grade-chip">${escapeHtml(row.gradeCm)}</span></td><td class="money"><strong>${money(row.pricePerBunch)}</strong></td><td class="date-cell">${dateTime(row.updatedAt)}</td></tr>`).join('');
+  $('#price-list-empty').classList.toggle('is-hidden', state.prices.length > 0);
 }
 
 function switchView(view) {
   state.activeView = view;
   $$('.view').forEach(element => element.classList.toggle('active', element.id === `view-${view}`));
   $$('.nav-link').forEach(element => element.classList.toggle('active', element.dataset.view === view));
-  const titles = { dashboard: 'Resumen', inventory: 'Inventario', 'new-remission': 'Nueva remisión', history: 'Historial' };
+  const titles = { dashboard: 'Resumen', inventory: 'Inventario', prices: 'Lista de precios', 'new-remission': 'Nueva remisión', history: 'Historial' };
   $('#view-title').textContent = titles[view];
   $('#sidebar').classList.remove('open');
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -157,43 +162,16 @@ function toast(message) {
 
 function clearRemission() {
   $('#remission-form').reset();
+  state.lines = []; state.stepGrade = 'ALL';
+  $('#step-grade-filter').value = 'ALL';
+  $('#line-bunches').value = 1;
+  renderVarietyOptions(); renderLines();
   $('#remission-error').textContent = '';
-}
-
-async function openItemsStep(id) {
-  try {
-    const [remission, inventory] = await Promise.all([api(`/api/remissions/${id}`), api('/api/inventory')]);
-    if (remission.status !== 'PENDIENTE_VARIEDADES') return continueRemission(remission);
-    state.inventory = inventory; state.activeRemission = remission; state.lines = []; state.unlockToday = false; state.stepGrade = 'ALL';
-    $('#step-grade-filter').value = 'ALL'; renderTodayUnlock();
-    $('#items-step-heading').textContent = `${remission.remissionNumber} · ${remission.clientName}`;
-    $('#items-step-target').innerHTML = `<span>Pedido solicitado</span><strong>${bunchLabel(remission.requestedBunches)} · ${number(remission.requestedStems)} tallos</strong>`;
-    $('#items-step-error').textContent = ''; $('#line-error').textContent = '';
-    renderLines(); $('#items-step-dialog').showModal();
-  } catch (error) { toast(error.message); }
-}
-
-async function openPricesStep(id) {
-  try {
-    const remission = await api(`/api/remissions/${id}`);
-    if (remission.status !== 'PENDIENTE_PRECIOS') return continueRemission(remission);
-    state.activeRemission = remission;
-    $('#prices-step-heading').textContent = `${remission.remissionNumber} · ${remission.clientName}`;
-    $('#prices-step-error').textContent = '';
-    $('#price-lines').innerHTML = remission.items.map(item => `<label class="price-line"><span><strong>${escapeHtml(item.variety)}</strong><small>${escapeHtml(item.gradeCm)} · ${number(item.bunches)} ramos · ${number(item.stems)} tallos</small></span><span>Precio por ramo<input type="number" min="0.01" step="0.01" value="${item.unitPriceBunch || ''}" data-price-id="${item.id}" data-price-bunches="${item.bunches}" required></span></label>`).join('');
-    updatePricesTotal(); $('#prices-step-dialog').showModal();
-  } catch (error) { toast(error.message); }
+  $('#line-error').textContent = '';
 }
 
 function continueRemission(remission) {
-  if (remission.status === 'PENDIENTE_VARIEDADES') return openItemsStep(remission.id);
-  if (remission.status === 'PENDIENTE_PRECIOS') return openPricesStep(remission.id);
   renderDocument(remission); $('#remission-dialog').showModal();
-}
-
-function updatePricesTotal() {
-  const total = $$('[data-price-id]').reduce((sum, input) => sum + (Number(input.value) || 0) * Number(input.dataset.priceBunches), 0);
-  $('#prices-total').textContent = money(total);
 }
 
 async function openRemission(id) {
@@ -263,16 +241,14 @@ $('#inventory-date').addEventListener('change', event => setDateFilter(event.tar
 $('#dashboard-grade').addEventListener('change', event => setGradeFilter(event.target.value));
 $('#inventory-grade').addEventListener('change', event => setGradeFilter(event.target.value));
 $$('[data-clear-filters]').forEach(button => button.addEventListener('click', () => { setDateFilter(''); setGradeFilter('ALL'); }));
-$('#requested-bunches').addEventListener('input', event => {
-  const bunches = Math.max(0, Number.parseInt(event.target.value, 10) || 0);
-  $('#requested-stems').value = bunches ? bunches * 25 : '';
-});
 $('#step-grade-filter').addEventListener('change', event => { state.stepGrade = event.target.value; renderVarietyOptions(); });
 $('#line-variety').addEventListener('change', renderStockPreview);
-$('#unlock-today-button').addEventListener('click', () => {
-  if (!state.unlockToday && !window.confirm('La flor ingresada hoy normalmente solo se vende desde mañana. ¿Desea desbloquearla para esta remisión?')) return;
-  state.unlockToday = !state.unlockToday;
-  renderTodayUnlock();
+$('#remission-client-name').addEventListener('input', renderStockPreview);
+$('#remission-client-name').addEventListener('change', () => {
+  if (!state.lines.length) return;
+  state.lines = [];
+  renderLines();
+  toast('Se ajustó el cliente; agregue nuevamente las variedades para aplicar sus precios.');
 });
 
 document.addEventListener('click', async event => {
@@ -281,13 +257,10 @@ document.addEventListener('click', async event => {
   const removeButton = event.target.closest('[data-remove-line]');
   const closeButton = event.target.closest('[data-close-dialog]');
   if (remissionButton) {
-    const action = remissionButton.dataset.remissionAction;
-    if (action === 'items') openItemsStep(remissionButton.dataset.remissionId);
-    else if (action === 'prices') openPricesStep(remissionButton.dataset.remissionId);
-    else openRemission(remissionButton.dataset.remissionId);
+    openRemission(remissionButton.dataset.remissionId);
   }
   if (cancelButton) openCancelRemission(cancelButton.dataset.cancelRemission);
-  if (removeButton) { state.lines = state.lines.filter(row => row.key !== removeButton.dataset.removeLine); $('#items-step-error').textContent = ''; renderLines(); }
+  if (removeButton) { state.lines = state.lines.filter(row => row.key !== removeButton.dataset.removeLine); $('#remission-error').textContent = ''; renderLines(); }
   if (closeButton) $(`#${closeButton.dataset.closeDialog}`).close();
 });
 
@@ -296,49 +269,42 @@ $('#add-line-button').addEventListener('click', () => {
   const bunches = Math.max(0, Number.parseInt($('#line-bunches').value, 10) || 0);
   const error = $('#line-error'); error.textContent = '';
   if (!item) return error.textContent = 'Seleccione una variedad.';
-  if (isTodayInventory(item) && !state.unlockToday) return error.textContent = 'La flor de hoy está bloqueada hasta mañana.';
   if (!bunches) return error.textContent = 'Ingrese al menos un ramo.';
+  const price = selectedPrice($('#remission-client-name').value, item.variety, item.gradeCm);
+  if (!price) return error.textContent = `No hay precio para ${item.variety} · ${item.gradeCm}. Regístrelo en Lista de precios.`;
   if (bunches > item.bunches) return error.textContent = `Disponibles: ${item.bunches} ramos.`;
   if (state.lines.some(row => row.key === item.key)) return error.textContent = 'Este grupo ya está agregado.';
-  state.lines.push({ key: item.key, date: item.date, variety: item.variety, gradeCm: item.gradeCm, stemsPerBunch: item.stemsPerBunch, bunches, stems: bunches * item.stemsPerBunch });
-  $('#items-step-error').textContent = '';
-  $('#line-variety').value = ''; $('#line-bunches').value = 1; renderLines();
+  const unitPriceBunch = price.pricePerBunch;
+  state.lines.push({ key: item.key, date: item.date, variety: item.variety, gradeCm: item.gradeCm, stemsPerBunch: item.stemsPerBunch, bunches, stems: bunches * item.stemsPerBunch, unitPriceBunch, subtotal: bunches * unitPriceBunch });
+  $('#remission-error').textContent = '';
+  $('#line-variety').value = ''; $('#line-bunches').value = 1; renderStockPreview(); renderLines();
 });
 
 $('#remission-form').addEventListener('submit', async event => {
   event.preventDefault();
   const button = event.submitter;
   $('#remission-error').textContent = '';
-  const payload = Object.fromEntries(new FormData(event.currentTarget));
+  if (!state.lines.length) return $('#remission-error').textContent = 'Agregue al menos una variedad.';
+  const payload = { ...Object.fromEntries(new FormData(event.currentTarget)), items: state.lines.map(({ key, bunches }) => ({ key, bunches })) };
   button.disabled = true;
   try {
     const remission = await api('/api/remissions', { method: 'POST', body: JSON.stringify(payload) });
-    clearRemission(); await refreshAll(); switchView('history'); toast(`${remission.remissionNumber} creada. Continúe con las variedades en el paso 2.`);
+    renderDocument(remission); clearRemission(); await refreshAll(); $('#remission-dialog').showModal(); toast('Remisión finalizada e inventario actualizado.');
   } catch (error) { $('#remission-error').textContent = error.message; }
   finally { button.disabled = false; }
 });
 
-$('#items-step-form').addEventListener('submit', async event => {
+$('#price-form').addEventListener('submit', async event => {
   event.preventDefault();
-  const button = event.submitter; const error = $('#items-step-error'); error.textContent = '';
-  if (!state.lines.length) return error.textContent = 'Agregue al menos una variedad.';
+  const button = event.submitter;
+  const error = $('#price-error');
+  error.textContent = '';
   button.disabled = true;
   try {
-    const remission = await api(`/api/remissions/${state.activeRemission.id}/items`, { method: 'PUT', body: JSON.stringify({ items: state.lines.map(({ key, bunches }) => ({ key, bunches })), unlockToday: state.unlockToday }) });
-    $('#items-step-dialog').close(); await refreshAll(); switchView('history'); toast(`${remission.remissionNumber}: inventario actualizado. Falta ingresar precios.`);
-  } catch (requestError) { error.textContent = requestError.message; }
-  finally { button.disabled = false; }
-});
-
-$('#price-lines').addEventListener('input', updatePricesTotal);
-$('#prices-step-form').addEventListener('submit', async event => {
-  event.preventDefault();
-  const button = event.submitter; const error = $('#prices-step-error'); error.textContent = '';
-  const items = $$('[data-price-id]').map(input => ({ id: Number(input.dataset.priceId), unitPriceBunch: Number(input.value) }));
-  button.disabled = true;
-  try {
-    const remission = await api(`/api/remissions/${state.activeRemission.id}/prices`, { method: 'PUT', body: JSON.stringify({ items }) });
-    $('#prices-step-dialog').close(); renderDocument(remission); await refreshAll(); $('#remission-dialog').showModal(); toast('Remisión finalizada y lista para imprimir.');
+    await api('/api/price-lists', { method: 'PUT', body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget))) });
+    event.currentTarget.reset();
+    await refreshAll();
+    toast('Precio guardado. Las próximas remisiones usarán este valor.');
   } catch (requestError) { error.textContent = requestError.message; }
   finally { button.disabled = false; }
 });
@@ -377,4 +343,4 @@ setInterval(() => {
   } else if (appVisible && state.activeView === 'history') {
     loadFullHistory().catch(() => {});
   }
-}, 20000);
+}, 10000);
