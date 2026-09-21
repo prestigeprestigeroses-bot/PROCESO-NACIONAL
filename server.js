@@ -71,9 +71,10 @@ app.post('/api/auth/logout', (_request, response) => {
 
 app.get('/api/config', requireAuth, (_request, response) => response.json({
   companyName: process.env.COMPANY_NAME || 'Prestige Roses',
-  companyNit: process.env.COMPANY_NIT || '',
-  companyPhone: process.env.COMPANY_PHONE || '',
-  companyAddress: process.env.COMPANY_ADDRESS || ''
+  companyNit: process.env.COMPANY_NIT || '900 149 336-5',
+  companyPhone: process.env.COMPANY_PHONE || 'Oficina: (0571) 880 9538 · Cels.: 315 291 3753 · 315 294 4064',
+  companyAddress: process.env.COMPANY_ADDRESS || 'Nemocón - Vereda Checua (Finca Rincón)',
+  companyEmail: process.env.COMPANY_EMAIL || 'administracion@prestigeroses.com · ventas@prestigeroses.com'
 }));
 app.get('/api/dashboard', requireAuth, async (_request, response, next) => { try { response.json(await store.dashboard()); } catch (error) { next(error); } });
 app.get('/api/inventory', requireAuth, async (_request, response, next) => { try { response.json(await store.listInventory()); } catch (error) { next(error); } });
