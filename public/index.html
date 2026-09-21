@@ -146,6 +146,7 @@
                 <label>Grado<select name="gradeCm"><option value="NACIONAL">Nacional</option><option value="BAJAS">Bajas</option><option value="NACIONAL GRANEL">Nacional granel</option></select></label>
                 <label>Precio por ramo (COP)<input name="pricePerBunch" type="number" min="1" step="1" placeholder="Ej. 6000"></label>
                 <button class="button button--dark" type="button" id="add-price-draft">Agregar variedad</button>
+                <div class="price-bulk span-2"><div><strong>Precio para las variedades restantes</strong><span>Usa el mismo precio y grado seleccionados para las variedades que aún no se han agregado o configurado para este cliente.</span></div><button class="small-button" type="button" id="add-remaining-price-drafts">Aplicar a las restantes</button></div>
                 <div class="price-draft span-2" id="price-draft-lines"></div>
                 <button class="button button--primary span-2" type="submit">Guardar precios del cliente</button>
               </form>

@@ -1,5 +1,5 @@
 const varieties = ['FREEDOM', 'PINK FLOYD', 'MONDIAL', 'HUMMER', 'MOMENTUM', 'CORAL REEF', 'QUICK SAND', 'HILUX', 'CANDLELIGHT', 'DEEP PURPLE', 'SUMMERSAND', 'STAR PLATINUM', 'SHIMMER', 'PINK OHARA', 'WHITE OHARA', 'PINK MONDIAL', 'BLESSING', 'PINK AMARETO', 'TIFFANY', 'YELLOW BIKINI', 'QUEEN BERRY', 'MOODY BLUE', 'SWAN', 'HIGH MAGIC', 'EXPLORER', 'DANCING RED', 'VENDELA'];
-const state = { inventory: [], remissions: [], prices: [], priceDrafts: [], editingPriceClientKey: null, lines: [], activeRemission: null, stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
+const state = { inventory: [], remissions: [], prices: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), lines: [], activeRemission: null, stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const money = value => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', currencyDisplay: 'code', maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -148,7 +148,15 @@ function renderPrices() {
     if (!groups.has(key)) groups.set(key, { clientName: row.clientName || 'Precio general', rows: [] });
     groups.get(key).rows.push(row);
   });
-  $('#price-list-body').innerHTML = [...groups.entries()].map(([key, group]) => `<article class="price-client-card"><header><div><span>CLIENTE</span><h4>${escapeHtml(group.clientName)}</h4><small>${group.rows.length} ${group.rows.length === 1 ? 'variedad configurada' : 'variedades configuradas'}</small></div><button class="small-button" type="button" data-edit-price-client="${escapeHtml(key)}">Editar lista</button></header><div class="price-client-items">${group.rows.map(row => `<div><strong>${escapeHtml(row.variety)}</strong><span class="grade-chip">${escapeHtml(row.gradeCm)}</span><b>${money(row.pricePerBunch)}</b></div>`).join('')}</div></article>`).join('');
+  const cardColors = ['#176b57', '#265f99', '#7955a2', '#a05a28', '#9a3f58', '#28736e'];
+  $('#price-list-body').innerHTML = [...groups.entries()].map(([key, group], index) => {
+    const gradeSummary = ['NACIONAL', 'BAJAS', 'NACIONAL GRANEL'].map(grade => {
+      const count = group.rows.filter(row => row.gradeCm === grade).length;
+      return count ? `${grade === 'NACIONAL GRANEL' ? 'Granel' : grade[0] + grade.slice(1).toLowerCase()}: ${count}` : '';
+    }).filter(Boolean).join(' · ');
+    const expanded = state.expandedPriceClients.has(key);
+    return `<article class="price-client-card${expanded ? ' is-expanded' : ''}" style="--client-color:${cardColors[index % cardColors.length]}"><header><div><span>CLIENTE</span><h4>${escapeHtml(group.clientName)}</h4><small>${group.rows.length} ${group.rows.length === 1 ? 'precio configurado' : 'precios configurados'} · ${escapeHtml(gradeSummary)}</small></div><div class="price-client-actions"><button class="small-button" type="button" data-toggle-price-client="${escapeHtml(key)}">${expanded ? 'Ocultar detalle' : 'Ver detalle'}</button><button class="small-button" type="button" data-edit-price-client="${escapeHtml(key)}">Editar lista</button><button class="small-button small-button--danger" type="button" data-delete-price-client="${escapeHtml(key)}">Eliminar precios</button></div></header><div class="price-client-items">${group.rows.map(row => `<div><strong>${escapeHtml(row.variety)}</strong><span class="grade-chip">${escapeHtml(row.gradeCm)}</span><b>${money(row.pricePerBunch)}</b></div>`).join('')}</div></article>`;
+  }).join('');
   $('#price-list-empty').classList.toggle('is-hidden', prices.length > 0);
   renderPriceDrafts();
 }
@@ -174,6 +182,26 @@ function addPriceDraft() {
   $('#price-variety').value = '';
   form.elements.pricePerBunch.value = '';
   renderPriceDrafts();
+}
+
+function addRemainingPriceDrafts() {
+  const form = $('#price-form');
+  const gradeCm = form.elements.gradeCm.value;
+  const pricePerBunch = Math.max(0, Number(form.elements.pricePerBunch.value) || 0);
+  const error = $('#price-error');
+  error.textContent = '';
+  if (!pricePerBunch) return error.textContent = 'Ingrese el precio por ramo que aplicará a las variedades restantes.';
+  const currentClient = clientKey(form.elements.clientName.value) || '__GENERAL__';
+  const alreadyAdded = new Set([
+    ...state.priceDrafts.filter(row => row.gradeCm === gradeCm).map(row => clientKey(row.variety)),
+    ...state.prices.filter(row => (clientKey(row.clientName) || '__GENERAL__') === currentClient && row.gradeCm === gradeCm).map(row => clientKey(row.variety))
+  ]);
+  const remaining = varieties.filter(variety => !alreadyAdded.has(clientKey(variety)));
+  if (!remaining.length) return error.textContent = `Ya están agregadas todas las variedades para ${gradeCm}.`;
+  state.priceDrafts.push(...remaining.map(variety => ({ variety, gradeCm, pricePerBunch })));
+  form.elements.pricePerBunch.value = '';
+  renderPriceDrafts();
+  toast(`${remaining.length} variedades agregadas con el mismo precio.`);
 }
 
 function switchView(view) {
@@ -297,6 +325,8 @@ document.addEventListener('click', async event => {
   const removeButton = event.target.closest('[data-remove-line]');
   const removePriceDraft = event.target.closest('[data-remove-price-draft]');
   const editPriceClient = event.target.closest('[data-edit-price-client]');
+  const deletePriceClient = event.target.closest('[data-delete-price-client]');
+  const togglePriceClient = event.target.closest('[data-toggle-price-client]');
   const closeButton = event.target.closest('[data-close-dialog]');
   if (remissionButton) {
     openRemission(remissionButton.dataset.remissionId);
@@ -304,6 +334,12 @@ document.addEventListener('click', async event => {
   if (cancelButton) openCancelRemission(cancelButton.dataset.cancelRemission);
   if (removeButton) { state.lines = state.lines.filter(row => row.key !== removeButton.dataset.removeLine); $('#remission-error').textContent = ''; renderLines(); }
   if (removePriceDraft) { state.priceDrafts.splice(Number(removePriceDraft.dataset.removePriceDraft), 1); renderPriceDrafts(); }
+  if (togglePriceClient) {
+    const key = togglePriceClient.dataset.togglePriceClient;
+    if (state.expandedPriceClients.has(key)) state.expandedPriceClients.delete(key);
+    else state.expandedPriceClients.add(key);
+    renderPrices();
+  }
   if (editPriceClient) {
     const key = editPriceClient.dataset.editPriceClient;
     const rows = state.prices.filter(row => (clientKey(row.clientName) || '__GENERAL__') === key);
@@ -316,6 +352,21 @@ document.addEventListener('click', async event => {
       $('#price-error').textContent = 'Editando la lista completa: puede cambiar, agregar o quitar variedades y luego guardar.';
       renderPriceDrafts();
       switchView('prices');
+    }
+  }
+  if (deletePriceClient) {
+    const key = deletePriceClient.dataset.deletePriceClient;
+    const rows = state.prices.filter(row => (clientKey(row.clientName) || '__GENERAL__') === key);
+    const label = rows[0]?.clientName || 'el precio general';
+    if (rows.length && window.confirm(`Se eliminarán los ${rows.length} precios de ${label}. ¿Desea continuar?`)) {
+      deletePriceClient.disabled = true;
+      try {
+        await Promise.all(rows.map(row => api(`/api/price-lists/${row.id}`, { method: 'DELETE' })));
+        if (state.editingPriceClientKey === key) { state.priceDrafts = []; state.editingPriceClientKey = null; $('#price-form').reset(); }
+        await refreshAll();
+        toast(`Precios de ${label} eliminados.`);
+      } catch (error) { $('#price-error').textContent = error.message; }
+      finally { deletePriceClient.disabled = false; }
     }
   }
   if (closeButton) $(`#${closeButton.dataset.closeDialog}`).close();
@@ -352,6 +403,7 @@ $('#remission-form').addEventListener('submit', async event => {
 });
 
 $('#add-price-draft').addEventListener('click', addPriceDraft);
+$('#add-remaining-price-drafts').addEventListener('click', addRemainingPriceDrafts);
 
 $('#price-form').addEventListener('submit', async event => {
   event.preventDefault();
