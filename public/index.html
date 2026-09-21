@@ -111,7 +111,7 @@
                     <label>Filtrar por grado<select id="step-grade-filter"><option value="ALL">Todos los grados</option><option value="NACIONAL">Nacional</option><option value="BAJAS">Bajas</option><option value="NACIONAL GRANEL">Nacional granel</option></select></label>
                   </div>
                   <div class="line-add line-add--complete">
-                    <label>Variedad disponible<select id="line-variety"><option value="">Seleccione una variedad</option></select></label>
+                    <div class="variety-picker-field"><span>Variedad disponible</span><select id="line-variety" class="native-select-hidden" tabindex="-1" aria-hidden="true"><option value="">Seleccione una variedad</option></select><div class="variety-picker" id="line-variety-picker"></div></div>
                     <label>Ramos<input id="line-bunches" type="number" min="1" value="1"></label>
                     <button class="button button--dark" type="button" id="add-line-button">Agregar</button>
                   </div>

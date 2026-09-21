@@ -89,8 +89,16 @@ function renderInventory() {
 
 function renderVarietyOptions() {
   const rows = state.inventory.filter(item => state.stepGrade === 'ALL' || item.gradeCm === state.stepGrade);
-  $('#line-variety').innerHTML = '<option value="">Seleccione una variedad</option>' + rows.map(item => `<option value="${item.key}">${escapeHtml(item.variety)} · ${escapeHtml(item.gradeCm)} · ${inventoryDate(item.date)} · ${item.bunches} ${item.bunches === 1 ? 'ramo disponible' : 'ramos disponibles'}</option>`).join('') + (rows.length ? '' : '<option disabled>Sin inventario para este grado</option>');
+  $('#line-variety').innerHTML = '<option value="">Seleccione una variedad</option>' + rows.map(item => `<option value="${item.key}">${escapeHtml(item.variety)} · ${escapeHtml(item.gradeCm)} · ${item.bunches} ${item.bunches === 1 ? 'ramo disponible' : 'ramos disponibles'}</option>`).join('') + (rows.length ? '' : '<option disabled>Sin inventario para este grado</option>');
+  renderVarietyPicker(rows);
   renderStockPreview();
+}
+
+function renderVarietyPicker(rows) {
+  const select = $('#line-variety');
+  const selected = rows.find(item => item.key === select.value);
+  const label = selected ? `<strong>${escapeHtml(selected.variety)}</strong><span>${escapeHtml(selected.gradeCm)} · ${selected.bunches} ${selected.bunches === 1 ? 'ramo disponible' : 'ramos disponibles'}</span>` : '<span>Seleccione una variedad</span>';
+  $('#line-variety-picker').innerHTML = `<button class="variety-picker-trigger" type="button" aria-expanded="false">${label}<b>⌄</b></button><div class="variety-picker-menu"><button type="button" class="variety-picker-option" data-line-variety-option=""><span>Seleccione una variedad</span></button>${rows.map(item => `<button type="button" class="variety-picker-option" data-line-variety-option="${escapeHtml(item.key)}"><strong>${escapeHtml(item.variety)}</strong><span>${escapeHtml(item.gradeCm)} · ${item.bunches} ${item.bunches === 1 ? 'ramo disponible' : 'ramos disponibles'}</span></button>`).join('')}</div>`;
 }
 
 function renderStockPreview() {
@@ -334,6 +342,8 @@ document.addEventListener('click', async event => {
   const editPriceClient = event.target.closest('[data-edit-price-client]');
   const deletePriceClient = event.target.closest('[data-delete-price-client]');
   const togglePriceClient = event.target.closest('[data-toggle-price-client]');
+  const varietyPickerToggle = event.target.closest('.variety-picker-trigger');
+  const varietyPickerOption = event.target.closest('[data-line-variety-option]');
   const closeButton = event.target.closest('[data-close-dialog]');
   if (remissionButton) {
     openRemission(remissionButton.dataset.remissionId);
@@ -341,6 +351,17 @@ document.addEventListener('click', async event => {
   if (cancelButton) openCancelRemission(cancelButton.dataset.cancelRemission);
   if (removeButton) { state.lines = state.lines.filter(row => row.key !== removeButton.dataset.removeLine); $('#remission-error').textContent = ''; renderLines(); }
   if (removePriceDraft) { state.priceDrafts.splice(Number(removePriceDraft.dataset.removePriceDraft), 1); renderPriceDrafts(); }
+  if (varietyPickerToggle) {
+    const picker = $('#line-variety-picker');
+    const open = picker.classList.toggle('is-open');
+    varietyPickerToggle.setAttribute('aria-expanded', String(open));
+  } else if (varietyPickerOption) {
+    $('#line-variety').value = varietyPickerOption.dataset.lineVarietyOption;
+    renderVarietyPicker(state.inventory.filter(item => state.stepGrade === 'ALL' || item.gradeCm === state.stepGrade));
+    renderStockPreview();
+  } else if (!event.target.closest('#line-variety-picker')) {
+    $('#line-variety-picker')?.classList.remove('is-open');
+  }
   if (togglePriceClient) {
     const key = togglePriceClient.dataset.togglePriceClient;
     if (state.expandedPriceClients.has(key)) state.expandedPriceClients.delete(key);
@@ -392,7 +413,7 @@ $('#add-line-button').addEventListener('click', () => {
   const unitPriceBunch = price.pricePerBunch;
   state.lines.push({ key: item.key, date: item.date, variety: item.variety, gradeCm: item.gradeCm, stemsPerBunch: item.stemsPerBunch, bunches, stems: bunches * item.stemsPerBunch, unitPriceBunch, subtotal: bunches * unitPriceBunch });
   $('#remission-error').textContent = '';
-  $('#line-variety').value = ''; $('#line-bunches').value = 1; renderStockPreview(); renderLines();
+  $('#line-variety').value = ''; $('#line-bunches').value = 1; renderVarietyOptions(); renderLines();
 });
 
 $('#remission-form').addEventListener('submit', async event => {
