@@ -343,13 +343,15 @@ function cleanRemissionInput(input) {
   const items = (Array.isArray(input.items) ? input.items : [])
     .map(row => ({
       key: String(row.key || ''),
-      bunches: Math.max(0, Number.parseInt(row.bunches, 10) || 0)
+      bunches: Math.max(0, Number.parseInt(row.bunches, 10) || 0),
+      unitPriceBunch: row.unitPriceBunch === undefined || row.unitPriceBunch === null || row.unitPriceBunch === '' ? null : Number(row.unitPriceBunch)
     }))
     .filter(row => row.key && row.bunches > 0);
   if (!items.length) throw new Error('Agregue al menos una variedad a la remisión.');
   const keys = new Set();
   for (const item of items) {
     if (keys.has(item.key)) throw new Error('Una variedad está repetida en la remisión.');
+    if (item.unitPriceBunch !== null && !(item.unitPriceBunch > 0)) throw new Error('El precio por ramo debe ser mayor que cero.');
     keys.add(item.key);
   }
   return { details, items };
@@ -457,7 +459,7 @@ async function createRemission(input) {
     const detailRows = selected.map(({ requested, decoded }, index) => {
       const price = resolveMemoryPrice(details.clientName, decoded.variety, decoded.gradeCm);
       if (!price) throw new Error(`No hay precio configurado para ${decoded.variety} · ${decoded.gradeCm}. Regístrelo en Lista de precios.`);
-      const unitPriceBunch = Number(price.pricePerBunch);
+      const unitPriceBunch = requested.unitPriceBunch ?? Number(price.pricePerBunch);
       return {
         id: index + 1, inventoryId: null, variety: decoded.variety, sourceDate: decoded.sourceDate,
         gradeCm: decoded.gradeCm, stemsPerBunch: decoded.stemsPerBunch, bunches: requested.bunches,
@@ -494,7 +496,7 @@ async function createRemission(input) {
         [selected.variety, selected.gradeCm, [normalizedText(details.clientName), generalPriceKey], normalizedText(details.clientName)]
       );
       if (!priceResult.rows[0]) throw new Error(`No hay precio configurado para ${selected.variety} · ${selected.gradeCm}. Regístrelo en Lista de precios.`);
-      const unitPriceBunch = Number(priceResult.rows[0].price_per_bunch);
+      const unitPriceBunch = requested.unitPriceBunch ?? Number(priceResult.rows[0].price_per_bunch);
       detailRows.push({ ...selected, bunches: requested.bunches, stems: requested.bunches * selected.stemsPerBunch, unitPriceBunch, subtotal: requested.bunches * unitPriceBunch });
     }
     const requestedBunches = detailRows.reduce((sum, row) => sum + row.bunches, 0);

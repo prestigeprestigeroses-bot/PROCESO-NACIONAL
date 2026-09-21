@@ -115,7 +115,7 @@ function statusMeta(status) {
 }
 
 function renderLines() {
-  $('#remission-lines').innerHTML = state.lines.map(line => `<div class="line-item line-item--complete"><strong>${escapeHtml(line.variety)}</strong><span>${escapeHtml(line.gradeCm)} · ${inventoryDate(line.date)}</span><span>${bunchLabel(line.bunches)}</span><span>${number(line.stems)} tallos</span><b>${money(line.subtotal)}</b><button type="button" class="remove-line" data-remove-line="${line.key}" aria-label="Quitar ${escapeHtml(line.variety)}">×</button></div>`).join('');
+  $('#remission-lines').innerHTML = state.lines.map(line => `<div class="line-item line-item--complete"><strong>${escapeHtml(line.variety)}</strong><span>${escapeHtml(line.gradeCm)} · ${inventoryDate(line.date)}</span><span>${bunchLabel(line.bunches)}</span><span>${number(line.stems)} tallos</span><label class="line-price"><small>Precio / ramo</small><input type="number" min="1" step="1" value="${Number(line.unitPriceBunch)}" data-line-price="${line.key}" aria-label="Precio por ramo de ${escapeHtml(line.variety)}"></label><b>${money(line.subtotal)}</b><button type="button" class="remove-line" data-remove-line="${line.key}" aria-label="Quitar ${escapeHtml(line.variety)}">×</button></div>`).join('');
   const bunches = state.lines.reduce((sum, row) => sum + row.bunches, 0);
   const stems = state.lines.reduce((sum, row) => sum + row.stems, 0);
   const total = state.lines.reduce((sum, row) => sum + row.subtotal, 0);
@@ -372,6 +372,20 @@ document.addEventListener('click', async event => {
   if (closeButton) $(`#${closeButton.dataset.closeDialog}`).close();
 });
 
+document.addEventListener('input', event => {
+  const priceInput = event.target.closest('[data-line-price]');
+  if (!priceInput) return;
+  const line = state.lines.find(row => row.key === priceInput.dataset.linePrice);
+  const price = Number(priceInput.value);
+  if (!line || !(price > 0)) return;
+  line.unitPriceBunch = price;
+  line.subtotal = line.bunches * price;
+  const total = state.lines.reduce((sum, row) => sum + row.subtotal, 0);
+  $('#summary-total').textContent = money(total);
+  const amount = priceInput.closest('.line-item').querySelector('b');
+  if (amount) amount.textContent = money(line.subtotal);
+});
+
 $('#add-line-button').addEventListener('click', () => {
   const item = state.inventory.find(row => row.key === $('#line-variety').value);
   const bunches = Math.max(0, Number.parseInt($('#line-bunches').value, 10) || 0);
@@ -393,7 +407,7 @@ $('#remission-form').addEventListener('submit', async event => {
   const button = event.submitter;
   $('#remission-error').textContent = '';
   if (!state.lines.length) return $('#remission-error').textContent = 'Agregue al menos una variedad.';
-  const payload = { ...Object.fromEntries(new FormData(event.currentTarget)), items: state.lines.map(({ key, bunches }) => ({ key, bunches })) };
+  const payload = { ...Object.fromEntries(new FormData(event.currentTarget)), items: state.lines.map(({ key, bunches, unitPriceBunch }) => ({ key, bunches, unitPriceBunch })) };
   button.disabled = true;
   try {
     const remission = await api('/api/remissions', { method: 'POST', body: JSON.stringify(payload) });
