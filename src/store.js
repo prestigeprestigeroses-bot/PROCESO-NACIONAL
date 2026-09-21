@@ -6,6 +6,7 @@ const usePostgres = Boolean(process.env.DATABASE_URL);
 const dataDirectory = path.join(process.cwd(), '.data');
 const dataFile = path.join(dataDirectory, 'flor-data.json');
 const allowedGrades = ['BAJAS', 'NACIONAL', 'NACIONAL GRANEL'];
+const businessTimeZone = process.env.BUSINESS_TIME_ZONE || 'America/Cancun';
 
 let pool;
 let memory;
@@ -34,6 +35,12 @@ function normalizedText(value) {
 function dateOnly(value = new Date()) {
   if (value instanceof Date) return value.toISOString().slice(0, 10);
   return String(value).slice(0, 10);
+}
+
+function businessToday() {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: businessTimeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+  const part = type => parts.find(item => item.type === type).value;
+  return `${part('year')}-${part('month')}-${part('day')}`;
 }
 
 function inventoryKey(item) {
@@ -221,7 +228,7 @@ async function listInventory() {
     return [...memory.inventory].map(item => {
       const normalized = { ...item, date: dateOnly(item.date ?? item.updatedAt), gradeCm: item.gradeCm || 'NACIONAL' };
       return { ...normalized, id: inventoryKey(normalized), key: inventoryKey(normalized) };
-    }).filter(item => item.date >= dateOnly()).sort((a, b) => b.date.localeCompare(a.date) || a.variety.localeCompare(b.variety));
+    }).filter(item => item.date >= businessToday()).sort((a, b) => b.date.localeCompare(a.date) || a.variety.localeCompare(b.variety));
   }
   const result = await pool.query(`
     WITH source AS (
@@ -234,7 +241,7 @@ async function listInventory() {
              MAX(ts) AS updated_at
       FROM public.scans
       WHERE UPPER(TRIM(grado_cm)) = ANY($1::text[])
-        AND ts::date >= CURRENT_DATE
+        AND ts::date >= (NOW() AT TIME ZONE $2)::date
         AND variedad_nombre IS NOT NULL AND TRIM(variedad_nombre) <> ''
         AND tallos IS NOT NULL AND tallos > 0
       GROUP BY ts::date,TRIM(variedad_nombre),UPPER(TRIM(grado_cm)),tallos
@@ -254,7 +261,7 @@ async function listInventory() {
     LEFT JOIN used USING (source_date,variety,grade_cm,stems_per_bunch)
     WHERE source.source_bunches-COALESCE(used.used_bunches,0) > 0
     ORDER BY source.source_date DESC,source.variety,source.grade_cm,source.stems_per_bunch
-  `, [allowedGrades]);
+  `, [allowedGrades, businessTimeZone]);
   return result.rows.map(row => {
     const item = {
       date: dateOnly(row.source_date),
