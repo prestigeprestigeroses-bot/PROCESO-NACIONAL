@@ -1,5 +1,5 @@
-const varieties = ['FREEDOM', 'PINK FLOYD', 'MONDIAL', 'HUMMER', 'MOMENTUM', 'CORAL REEF', 'QUICK SAND', 'HILUX', 'CANDLELIGHT', 'DEEP PURPLE', 'SUMMERSAND', 'STAR PLATINUM', 'SHIMMER', 'PINK OHARA', 'WHITE OHARA', 'PINK MONDIAL', 'BLESSING', 'PINK AMARETO', 'TIFFANY', 'YELLOW BIKINI', 'QUEEN BERRY', 'MOODY BLUE', 'SWAN', 'HIGH MAGIC', 'EXPLORER', 'DANCING RED'];
-const state = { inventory: [], remissions: [], prices: [], lines: [], activeRemission: null, stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
+const varieties = ['FREEDOM', 'PINK FLOYD', 'MONDIAL', 'HUMMER', 'MOMENTUM', 'CORAL REEF', 'QUICK SAND', 'HILUX', 'CANDLELIGHT', 'DEEP PURPLE', 'SUMMERSAND', 'STAR PLATINUM', 'SHIMMER', 'PINK OHARA', 'WHITE OHARA', 'PINK MONDIAL', 'BLESSING', 'PINK AMARETO', 'TIFFANY', 'YELLOW BIKINI', 'QUEEN BERRY', 'MOODY BLUE', 'SWAN', 'HIGH MAGIC', 'EXPLORER', 'DANCING RED', 'VENDELA'];
+const state = { inventory: [], remissions: [], prices: [], priceDrafts: [], editingPriceClientKey: null, lines: [], activeRemission: null, stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const money = value => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', currencyDisplay: 'code', maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -142,8 +142,38 @@ function renderPrices() {
   const clients = [...new Set(prices.map(row => row.clientName).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   $('#known-clients').innerHTML = clients.map(client => `<option value="${escapeHtml(client)}"></option>`).join('');
   $('#price-count').textContent = `${prices.length} ${prices.length === 1 ? 'PRECIO' : 'PRECIOS'}`;
-  $('#price-list-body').innerHTML = prices.map(row => `<tr><td>${escapeHtml(row.clientName || 'General')}</td><td><strong>${escapeHtml(row.variety)}</strong></td><td><span class="grade-chip">${escapeHtml(row.gradeCm)}</span></td><td class="money"><strong>${money(row.pricePerBunch)}</strong></td><td class="date-cell">${dateTime(row.updatedAt)}</td></tr>`).join('');
+  const groups = new Map();
+  prices.forEach(row => {
+    const key = clientKey(row.clientName) || '__GENERAL__';
+    if (!groups.has(key)) groups.set(key, { clientName: row.clientName || 'Precio general', rows: [] });
+    groups.get(key).rows.push(row);
+  });
+  $('#price-list-body').innerHTML = [...groups.entries()].map(([key, group]) => `<article class="price-client-card"><header><div><span>CLIENTE</span><h4>${escapeHtml(group.clientName)}</h4><small>${group.rows.length} ${group.rows.length === 1 ? 'variedad configurada' : 'variedades configuradas'}</small></div><button class="small-button" type="button" data-edit-price-client="${escapeHtml(key)}">Editar lista</button></header><div class="price-client-items">${group.rows.map(row => `<div><strong>${escapeHtml(row.variety)}</strong><span class="grade-chip">${escapeHtml(row.gradeCm)}</span><b>${money(row.pricePerBunch)}</b></div>`).join('')}</div></article>`).join('');
   $('#price-list-empty').classList.toggle('is-hidden', prices.length > 0);
+  renderPriceDrafts();
+}
+
+function renderPriceDrafts() {
+  const element = $('#price-draft-lines');
+  if (!element) return;
+  element.innerHTML = state.priceDrafts.map((row, index) => `<div class="price-draft-row"><strong>${escapeHtml(row.variety)}</strong><span>${escapeHtml(row.gradeCm)}</span><b>${money(row.pricePerBunch)}</b><button type="button" class="remove-line" data-remove-price-draft="${index}" aria-label="Quitar ${escapeHtml(row.variety)}">×</button></div>`).join('') || '<span class="price-draft-empty">Agregue varias variedades y guárdelas juntas para este cliente.</span>';
+}
+
+function addPriceDraft() {
+  const form = $('#price-form');
+  const variety = $('#price-variety').value;
+  const gradeCm = form.elements.gradeCm.value;
+  const pricePerBunch = Math.max(0, Number(form.elements.pricePerBunch.value) || 0);
+  const error = $('#price-error');
+  error.textContent = '';
+  if (!variety) return error.textContent = 'Seleccione una variedad.';
+  if (!pricePerBunch) return error.textContent = 'Ingrese un precio por ramo en COP.';
+  const existing = state.priceDrafts.find(row => row.variety === variety && row.gradeCm === gradeCm);
+  if (existing) existing.pricePerBunch = pricePerBunch;
+  else state.priceDrafts.push({ variety, gradeCm, pricePerBunch });
+  $('#price-variety').value = '';
+  form.elements.pricePerBunch.value = '';
+  renderPriceDrafts();
 }
 
 function switchView(view) {
@@ -265,12 +295,29 @@ document.addEventListener('click', async event => {
   const remissionButton = event.target.closest('[data-remission-id]');
   const cancelButton = event.target.closest('[data-cancel-remission]');
   const removeButton = event.target.closest('[data-remove-line]');
+  const removePriceDraft = event.target.closest('[data-remove-price-draft]');
+  const editPriceClient = event.target.closest('[data-edit-price-client]');
   const closeButton = event.target.closest('[data-close-dialog]');
   if (remissionButton) {
     openRemission(remissionButton.dataset.remissionId);
   }
   if (cancelButton) openCancelRemission(cancelButton.dataset.cancelRemission);
   if (removeButton) { state.lines = state.lines.filter(row => row.key !== removeButton.dataset.removeLine); $('#remission-error').textContent = ''; renderLines(); }
+  if (removePriceDraft) { state.priceDrafts.splice(Number(removePriceDraft.dataset.removePriceDraft), 1); renderPriceDrafts(); }
+  if (editPriceClient) {
+    const key = editPriceClient.dataset.editPriceClient;
+    const rows = state.prices.filter(row => (clientKey(row.clientName) || '__GENERAL__') === key);
+    if (rows.length) {
+      state.editingPriceClientKey = key;
+      state.priceDrafts = rows.map(row => ({ variety: varieties.find(variety => clientKey(variety) === clientKey(row.variety)) || row.variety, gradeCm: row.gradeCm, pricePerBunch: row.pricePerBunch }));
+      $('#price-client-name').value = rows[0].clientName || '';
+      $('#price-variety').value = '';
+      $('#price-form').elements.pricePerBunch.value = '';
+      $('#price-error').textContent = 'Editando la lista completa: puede cambiar, agregar o quitar variedades y luego guardar.';
+      renderPriceDrafts();
+      switchView('prices');
+    }
+  }
   if (closeButton) $(`#${closeButton.dataset.closeDialog}`).close();
 });
 
@@ -304,24 +351,29 @@ $('#remission-form').addEventListener('submit', async event => {
   finally { button.disabled = false; }
 });
 
+$('#add-price-draft').addEventListener('click', addPriceDraft);
+
 $('#price-form').addEventListener('submit', async event => {
   event.preventDefault();
   const form = event.currentTarget;
   const button = event.submitter;
   const error = $('#price-error');
   error.textContent = '';
+  if (!state.priceDrafts.length) return error.textContent = 'Agregue al menos una variedad a la lista antes de guardar.';
   button.disabled = true;
   try {
-    const saved = await api('/api/price-lists', { method: 'PUT', body: JSON.stringify(Object.fromEntries(new FormData(form))) });
-    const savedPrice = saved?.price || saved?.data || saved;
-    if (savedPrice && savedPrice.variety && savedPrice.gradeCm) {
-      const samePrice = row => clientKey(row.clientName) === clientKey(savedPrice.clientName) && clientKey(row.variety) === clientKey(savedPrice.variety) && row.gradeCm === savedPrice.gradeCm;
-      state.prices = [...state.prices.filter(row => !samePrice(row)), savedPrice];
-      renderPrices();
+    const clientName = form.elements.clientName.value.trim();
+    const currentKey = clientKey(clientName) || '__GENERAL__';
+    await Promise.all(state.priceDrafts.map(row => api('/api/price-lists', { method: 'PUT', body: JSON.stringify({ clientName, ...row }) })));
+    if (state.editingPriceClientKey === currentKey) {
+      const stillPresent = row => state.priceDrafts.some(draft => clientKey(draft.variety) === clientKey(row.variety) && draft.gradeCm === row.gradeCm);
+      await Promise.all(state.prices.filter(row => (clientKey(row.clientName) || '__GENERAL__') === currentKey && !stillPresent(row)).map(row => api(`/api/price-lists/${row.id}`, { method: 'DELETE' })));
     }
     form.reset();
+    state.priceDrafts = [];
+    state.editingPriceClientKey = null;
     await refreshAll();
-    toast('Precio guardado. Las próximas remisiones usarán este valor.');
+    toast('Precios guardados. Las próximas remisiones usarán estos valores.');
   } catch (requestError) { error.textContent = requestError.message; }
   finally { button.disabled = false; }
 });

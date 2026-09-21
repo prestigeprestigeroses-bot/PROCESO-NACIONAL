@@ -403,6 +403,21 @@ async function savePriceList(input) {
   return mapPriceList(result.rows[0]);
 }
 
+async function deletePriceList(id) {
+  const priceId = Number(id);
+  if (!Number.isInteger(priceId) || priceId < 1) throw new Error('El precio seleccionado no es válido.');
+  if (!usePostgres) {
+    const index = memory.priceLists.findIndex(row => Number(row.id) === priceId);
+    if (index < 0) throw new Error('Precio no encontrado.');
+    memory.priceLists.splice(index, 1);
+    persistMemory();
+    return { id: priceId };
+  }
+  const result = await pool.query('DELETE FROM price_lists WHERE id=$1 RETURNING id', [priceId]);
+  if (!result.rows[0]) throw new Error('Precio no encontrado.');
+  return { id: Number(result.rows[0].id) };
+}
+
 function resolveMemoryPrice(clientName, variety, gradeCm) {
   const clientKey = normalizedText(clientName);
   return memory.priceLists.find(row => row.clientKey === clientKey && normalizedText(row.variety) === normalizedText(variety) && row.gradeCm === gradeCm)
@@ -658,4 +673,4 @@ async function dashboard() {
   };
 }
 
-module.exports = { init, listInventory, saveInventory, adjustInventory, listPriceLists, savePriceList, createRemission, assignRemissionItems, setRemissionPrices, cancelRemission, listRemissions, getRemission, dashboard, usePostgres };
+module.exports = { init, listInventory, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, assignRemissionItems, setRemissionPrices, cancelRemission, listRemissions, getRemission, dashboard, usePostgres };

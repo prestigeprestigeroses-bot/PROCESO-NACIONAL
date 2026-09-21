@@ -142,16 +142,18 @@
               <div class="panel-title"><span>01</span><div><h3>Registrar o actualizar precio</h3><p>Deje el cliente vacío para crear un precio general que se usará cuando no haya uno especial.</p></div></div>
               <form id="price-form" class="price-form-grid">
                 <label class="span-2">Cliente (opcional)<input id="price-client-name" name="clientName" list="known-clients" placeholder="Ej. Cliente mayorista"></label>
-                <label>Variedad<select id="price-variety" name="variety" required></select></label>
-                <label>Grado<select name="gradeCm" required><option value="NACIONAL">Nacional</option><option value="BAJAS">Bajas</option><option value="NACIONAL GRANEL">Nacional granel</option></select></label>
-                <label>Precio por ramo (COP)<input name="pricePerBunch" type="number" min="1" step="1" placeholder="Ej. 6000" required></label>
-                <button class="button button--primary" type="submit">Guardar precio</button>
+                <label>Variedad<select id="price-variety" name="variety"></select></label>
+                <label>Grado<select name="gradeCm"><option value="NACIONAL">Nacional</option><option value="BAJAS">Bajas</option><option value="NACIONAL GRANEL">Nacional granel</option></select></label>
+                <label>Precio por ramo (COP)<input name="pricePerBunch" type="number" min="1" step="1" placeholder="Ej. 6000"></label>
+                <button class="button button--dark" type="button" id="add-price-draft">Agregar variedad</button>
+                <div class="price-draft span-2" id="price-draft-lines"></div>
+                <button class="button button--primary span-2" type="submit">Guardar precios del cliente</button>
               </form>
               <p class="form-error" id="price-error" role="alert"></p>
             </article>
             <article class="panel panel--table">
-              <div class="panel-head"><div><h3>Precios registrados</h3><p>Los precios especiales por cliente tienen prioridad sobre el precio general.</p></div><span class="live-chip" id="price-count">0 PRECIOS</span></div>
-              <div class="table-wrap"><table><thead><tr><th>Cliente</th><th>Variedad</th><th>Grado</th><th>Precio por ramo</th><th>Actualizado</th></tr></thead><tbody id="price-list-body"></tbody></table></div>
+              <div class="panel-head"><div><h3>Precios registrados</h3><p>Las variedades se agrupan por cliente para administrarlas fácilmente.</p></div><span class="live-chip" id="price-count">0 PRECIOS</span></div>
+              <div class="price-client-groups" id="price-list-body"></div>
               <div class="empty-state" id="price-list-empty"><strong>Aún no hay precios</strong><span>Registre precios generales antes de crear remisiones.</span></div>
             </article>
           </div>
@@ -186,6 +188,6 @@
 
   <div class="toast" id="toast" role="status"></div>
   <datalist id="known-clients"></datalist>
-  <script src="/app.js?v=20260920-7" defer></script>
+  <script src="/app.js?v=20260920-9" defer></script>
 </body>
 </html>
