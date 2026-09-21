@@ -1,5 +1,5 @@
 const varieties = ['FREEDOM', 'PINK FLOYD', 'MONDIAL', 'HUMMER', 'MOMENTUM', 'CORAL REEF', 'QUICK SAND', 'HILUX', 'CANDLELIGHT', 'DEEP PURPLE', 'SUMMERSAND', 'STAR PLATINUM', 'SHIMMER', 'PINK OHARA', 'WHITE OHARA', 'PINK MONDIAL', 'BLESSING', 'PINK AMARETO', 'TIFFANY', 'YELLOW BIKINI', 'QUEEN BERRY', 'MOODY BLUE', 'SWAN', 'HIGH MAGIC', 'EXPLORER', 'DANCING RED', 'VENDELA'];
-const state = { inventory: [], remissions: [], prices: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), lines: [], activeRemission: null, stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
+const state = { inventory: [], remissions: [], prices: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), lines: [], activeRemission: null, editingDocumentPrices: false, stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const money = value => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', currencyDisplay: 'code', maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -115,7 +115,7 @@ function statusMeta(status) {
 }
 
 function renderLines() {
-  $('#remission-lines').innerHTML = state.lines.map(line => `<div class="line-item line-item--complete"><strong>${escapeHtml(line.variety)}</strong><span>${escapeHtml(line.gradeCm)} · ${inventoryDate(line.date)}</span><span>${bunchLabel(line.bunches)}</span><span>${number(line.stems)} tallos</span><label class="line-price"><small>Precio / ramo</small><input type="number" min="1" step="1" value="${Number(line.unitPriceBunch)}" data-line-price="${line.key}" aria-label="Precio por ramo de ${escapeHtml(line.variety)}"></label><b>${money(line.subtotal)}</b><button type="button" class="remove-line" data-remove-line="${line.key}" aria-label="Quitar ${escapeHtml(line.variety)}">×</button></div>`).join('');
+  $('#remission-lines').innerHTML = state.lines.map(line => `<div class="line-item line-item--complete"><strong>${escapeHtml(line.variety)}</strong><span>${escapeHtml(line.gradeCm)} · ${inventoryDate(line.date)}</span><span>${bunchLabel(line.bunches)}</span><span>${number(line.stems)} tallos</span><b>${money(line.subtotal)}</b><button type="button" class="remove-line" data-remove-line="${line.key}" aria-label="Quitar ${escapeHtml(line.variety)}">×</button></div>`).join('');
   const bunches = state.lines.reduce((sum, row) => sum + row.bunches, 0);
   const stems = state.lines.reduce((sum, row) => sum + row.stems, 0);
   const total = state.lines.reduce((sum, row) => sum + row.subtotal, 0);
@@ -238,6 +238,8 @@ function clearRemission() {
 }
 
 function continueRemission(remission) {
+  state.activeRemission = remission;
+  state.editingDocumentPrices = false;
   renderDocument(remission); $('#remission-dialog').showModal();
 }
 
@@ -259,6 +261,7 @@ function openCancelRemission(id) {
 }
 
 function renderDocument(data) {
+  state.activeRemission = data;
   const company = state.config;
   const documentElement = $('#printable-document');
   documentElement.dataset.filename = data.remissionNumber;
@@ -266,12 +269,16 @@ function renderDocument(data) {
     ${data.status === 'ANULADA' ? '<div class="doc-canceled-mark">ANULADA</div>' : ''}
     <header class="doc-head"><div class="doc-brand"><span class="brand-logo brand-logo--document"><img src="/logo-prestige.jpeg" alt="Prestige Roses"></span><div><h2>${escapeHtml(company.companyName)}</h2><p>${escapeHtml(company.companyNit ? `NIT: ${company.companyNit}` : 'Salida nacional de flor')}</p></div></div><div class="doc-number"><span>REMISIÓN</span><strong>${escapeHtml(data.remissionNumber)}</strong><p>${dateTime(data.createdAt)}</p></div></header>
     <section class="doc-client"><div class="doc-field"><span>Cliente</span><strong>${escapeHtml(data.clientName)}</strong></div><div class="doc-field"><span>NIT / Documento</span><strong>${escapeHtml(data.clientDocument || '—')}</strong></div><div class="doc-field"><span>Entregado por</span><strong>${escapeHtml(data.deliveredBy || '—')}</strong></div></section>
-    <table class="doc-table"><thead><tr><th>Fecha</th><th>Variedad</th><th>Grado</th><th>Tallos/ramo</th><th>Ramos</th><th>Total tallos</th><th>Precio ramo</th><th>Subtotal</th></tr></thead><tbody>${data.items.map(item => `<tr><td>${item.sourceDate ? inventoryDate(item.sourceDate) : '—'}</td><td><strong>${escapeHtml(item.variety)}</strong></td><td>${escapeHtml(item.gradeCm || '—')}</td><td>${number(item.stemsPerBunch)}</td><td>${number(item.bunches)}</td><td>${number(item.stems)}</td><td>${money(item.unitPriceBunch)}</td><td>${money(item.subtotal)}</td></tr>`).join('')}</tbody></table>
+    <table class="doc-table"><thead><tr><th>Fecha</th><th>Variedad</th><th>Grado</th><th>Tallos/ramo</th><th>Ramos</th><th>Total tallos</th><th>Precio ramo</th><th>Subtotal</th></tr></thead><tbody>${data.items.map(item => `<tr><td>${item.sourceDate ? inventoryDate(item.sourceDate) : '—'}</td><td><strong>${escapeHtml(item.variety)}</strong></td><td>${escapeHtml(item.gradeCm || '—')}</td><td>${number(item.stemsPerBunch)}</td><td>${number(item.bunches)}</td><td>${number(item.stems)}</td><td>${state.editingDocumentPrices ? `<input class="doc-price-input" type="number" min="1" step="1" value="${Number(item.unitPriceBunch)}" data-document-price="${item.id}" aria-label="Precio por ramo de ${escapeHtml(item.variety)}">` : money(item.unitPriceBunch)}</td><td>${money(item.subtotal)}</td></tr>`).join('')}</tbody></table>
     <div class="doc-total"><span>TOTAL</span><span>${money(data.total)}</span></div>
     ${data.notes ? `<div class="doc-notes"><strong>Observaciones:</strong> ${escapeHtml(data.notes)}</div>` : ''}
     ${data.status === 'ANULADA' ? `<div class="doc-cancellation"><strong>Remisión anulada:</strong> ${escapeHtml(data.cancellationReason || 'Sin motivo registrado')} · ${data.canceledAt ? dateTime(data.canceledAt) : ''}</div>` : ''}
     <div class="doc-company-contact"><span>${escapeHtml(company.companyAddress)}</span><span>${escapeHtml(company.companyPhone)}</span><span>${escapeHtml(company.companyEmail || '')}</span></div>
     <footer class="doc-approval"><div class="doc-signature-card"><div class="doc-signature-space"></div><strong>Firma de quien recibe</strong><span>Nombre y documento</span></div><div class="doc-stamp"><strong>SELLO DE RECIBIDO</strong><span>Fecha: __________________</span><span>Hora: ___________________</span></div></footer>`;
+  const canEditPrices = data.status === 'FINALIZADA';
+  $('#edit-document-prices').classList.toggle('is-hidden', !canEditPrices || state.editingDocumentPrices);
+  $('#save-document-prices').classList.toggle('is-hidden', !state.editingDocumentPrices);
+  $('#cancel-document-prices').classList.toggle('is-hidden', !state.editingDocumentPrices);
 }
 
 $('#login-form').addEventListener('submit', async event => {
@@ -372,20 +379,6 @@ document.addEventListener('click', async event => {
   if (closeButton) $(`#${closeButton.dataset.closeDialog}`).close();
 });
 
-document.addEventListener('input', event => {
-  const priceInput = event.target.closest('[data-line-price]');
-  if (!priceInput) return;
-  const line = state.lines.find(row => row.key === priceInput.dataset.linePrice);
-  const price = Number(priceInput.value);
-  if (!line || !(price > 0)) return;
-  line.unitPriceBunch = price;
-  line.subtotal = line.bunches * price;
-  const total = state.lines.reduce((sum, row) => sum + row.subtotal, 0);
-  $('#summary-total').textContent = money(total);
-  const amount = priceInput.closest('.line-item').querySelector('b');
-  if (amount) amount.textContent = money(line.subtotal);
-});
-
 $('#add-line-button').addEventListener('click', () => {
   const item = state.inventory.find(row => row.key === $('#line-variety').value);
   const bunches = Math.max(0, Number.parseInt($('#line-bunches').value, 10) || 0);
@@ -407,7 +400,7 @@ $('#remission-form').addEventListener('submit', async event => {
   const button = event.submitter;
   $('#remission-error').textContent = '';
   if (!state.lines.length) return $('#remission-error').textContent = 'Agregue al menos una variedad.';
-  const payload = { ...Object.fromEntries(new FormData(event.currentTarget)), items: state.lines.map(({ key, bunches, unitPriceBunch }) => ({ key, bunches, unitPriceBunch })) };
+  const payload = { ...Object.fromEntries(new FormData(event.currentTarget)), items: state.lines.map(({ key, bunches }) => ({ key, bunches })) };
   button.disabled = true;
   try {
     const remission = await api('/api/remissions', { method: 'POST', body: JSON.stringify(payload) });
@@ -459,6 +452,31 @@ $('#cancel-remission-form').addEventListener('submit', async event => {
 
 $('#clear-remission').addEventListener('click', clearRemission);
 $('#close-document').addEventListener('click', () => $('#remission-dialog').close());
+$('#edit-document-prices').addEventListener('click', () => {
+  if (!state.activeRemission) return;
+  state.editingDocumentPrices = true;
+  renderDocument(state.activeRemission);
+});
+$('#cancel-document-prices').addEventListener('click', () => {
+  if (!state.activeRemission) return;
+  state.editingDocumentPrices = false;
+  renderDocument(state.activeRemission);
+});
+$('#save-document-prices').addEventListener('click', async event => {
+  if (!state.activeRemission) return;
+  const items = $$('[data-document-price]').map(input => ({ id: Number(input.dataset.documentPrice), unitPriceBunch: Number(input.value) }));
+  if (items.some(item => !(item.unitPriceBunch > 0))) return toast('Ingrese un precio por ramo mayor que cero para cada variedad.');
+  event.currentTarget.disabled = true;
+  try {
+    const remission = await api(`/api/remissions/${state.activeRemission.id}/prices`, { method: 'PUT', body: JSON.stringify({ items }) });
+    state.activeRemission = remission;
+    state.editingDocumentPrices = false;
+    renderDocument(remission);
+    await refreshAll();
+    toast('Precios de la remisión actualizados. La lista de precios no cambió.');
+  } catch (error) { toast(error.message); }
+  finally { event.currentTarget.disabled = false; }
+});
 $('#print-document').addEventListener('click', () => {
   const originalTitle = document.title;
   document.title = $('#printable-document').dataset.filename || 'remision';

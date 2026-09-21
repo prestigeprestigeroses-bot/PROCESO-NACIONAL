@@ -106,7 +106,7 @@
                   </div>
                 </article>
                 <article class="panel form-panel">
-                  <div class="panel-title"><span>02</span><div><h3>Variedades y grados</h3><p>El precio se toma de la lista configurada, pero puede ajustarlo por ramo para esta remisión sin cambiar la lista.</p></div></div>
+                  <div class="panel-title"><span>02</span><div><h3>Variedades y grados</h3><p>El precio se toma automáticamente de la lista configurada para este cliente.</p></div></div>
                   <div class="step-filter-row step-filter-row--single">
                     <label>Filtrar por grado<select id="step-grade-filter"><option value="ALL">Todos los grados</option><option value="NACIONAL">Nacional</option><option value="BAJAS">Bajas</option><option value="NACIONAL GRANEL">Nacional granel</option></select></label>
                   </div>
@@ -183,7 +183,7 @@
   </dialog>
 
   <dialog id="remission-dialog" class="document-dialog">
-    <div class="document-actions"><button class="button button--ghost" id="close-document">Cerrar</button><button class="button button--primary" id="print-document">Imprimir / Guardar PDF</button></div>
+    <div class="document-actions"><button class="button button--ghost" id="close-document">Cerrar</button><button class="button button--ghost" id="edit-document-prices">Editar precios</button><button class="button button--ghost is-hidden" id="cancel-document-prices">Cancelar edición</button><button class="button button--accent is-hidden" id="save-document-prices">Guardar precios</button><button class="button button--primary" id="print-document">Imprimir / Guardar PDF</button></div>
     <article class="document" id="printable-document"></article>
   </dialog>
 

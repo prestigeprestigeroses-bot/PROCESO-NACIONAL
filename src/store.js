@@ -343,15 +343,13 @@ function cleanRemissionInput(input) {
   const items = (Array.isArray(input.items) ? input.items : [])
     .map(row => ({
       key: String(row.key || ''),
-      bunches: Math.max(0, Number.parseInt(row.bunches, 10) || 0),
-      unitPriceBunch: row.unitPriceBunch === undefined || row.unitPriceBunch === null || row.unitPriceBunch === '' ? null : Number(row.unitPriceBunch)
+      bunches: Math.max(0, Number.parseInt(row.bunches, 10) || 0)
     }))
     .filter(row => row.key && row.bunches > 0);
   if (!items.length) throw new Error('Agregue al menos una variedad a la remisión.');
   const keys = new Set();
   for (const item of items) {
     if (keys.has(item.key)) throw new Error('Una variedad está repetida en la remisión.');
-    if (item.unitPriceBunch !== null && !(item.unitPriceBunch > 0)) throw new Error('El precio por ramo debe ser mayor que cero.');
     keys.add(item.key);
   }
   return { details, items };
@@ -459,7 +457,7 @@ async function createRemission(input) {
     const detailRows = selected.map(({ requested, decoded }, index) => {
       const price = resolveMemoryPrice(details.clientName, decoded.variety, decoded.gradeCm);
       if (!price) throw new Error(`No hay precio configurado para ${decoded.variety} · ${decoded.gradeCm}. Regístrelo en Lista de precios.`);
-      const unitPriceBunch = requested.unitPriceBunch ?? Number(price.pricePerBunch);
+      const unitPriceBunch = Number(price.pricePerBunch);
       return {
         id: index + 1, inventoryId: null, variety: decoded.variety, sourceDate: decoded.sourceDate,
         gradeCm: decoded.gradeCm, stemsPerBunch: decoded.stemsPerBunch, bunches: requested.bunches,
@@ -496,7 +494,7 @@ async function createRemission(input) {
         [selected.variety, selected.gradeCm, [normalizedText(details.clientName), generalPriceKey], normalizedText(details.clientName)]
       );
       if (!priceResult.rows[0]) throw new Error(`No hay precio configurado para ${selected.variety} · ${selected.gradeCm}. Regístrelo en Lista de precios.`);
-      const unitPriceBunch = requested.unitPriceBunch ?? Number(priceResult.rows[0].price_per_bunch);
+      const unitPriceBunch = Number(priceResult.rows[0].price_per_bunch);
       detailRows.push({ ...selected, bunches: requested.bunches, stems: requested.bunches * selected.stemsPerBunch, unitPriceBunch, subtotal: requested.bunches * unitPriceBunch });
     }
     const requestedBunches = detailRows.reduce((sum, row) => sum + row.bunches, 0);
@@ -587,9 +585,9 @@ async function setRemissionPrices(id, input) {
   if (!usePostgres) {
     const remission = memory.remissions.find(row => row.id === Number(id));
     if (!remission) throw new Error('Remisión no encontrada.');
-    if (remission.status !== 'PENDIENTE_PRECIOS') throw new Error('Esta remisión ya no está pendiente de precios.');
+    if (!['PENDIENTE_PRECIOS', 'FINALIZADA'].includes(remission.status)) throw new Error('Solo se pueden editar precios de remisiones finalizadas.');
     remission.items.forEach(item => { const price = prices.get(Number(item.id)); if (!(price > 0)) throw new Error('Ingrese un precio por ramo mayor que cero para cada variedad.'); item.unitPriceBunch = price; item.subtotal = item.bunches * price; });
-    remission.total = remission.items.reduce((sum, row) => sum + row.subtotal, 0); remission.status = 'FINALIZADA'; remission.finalizedAt = new Date().toISOString();
+    remission.total = remission.items.reduce((sum, row) => sum + row.subtotal, 0); remission.status = 'FINALIZADA'; remission.finalizedAt ||= new Date().toISOString();
     persistMemory(); return remission;
   }
   const client = await pool.connect();
@@ -597,7 +595,7 @@ async function setRemissionPrices(id, input) {
     await client.query('BEGIN');
     const header = await client.query('SELECT * FROM remissions WHERE id=$1 FOR UPDATE', [id]);
     if (!header.rows[0]) throw new Error('Remisión no encontrada.');
-    if (header.rows[0].status !== 'PENDIENTE_PRECIOS') throw new Error('Esta remisión ya no está pendiente de precios.');
+    if (!['PENDIENTE_PRECIOS', 'FINALIZADA'].includes(header.rows[0].status)) throw new Error('Solo se pueden editar precios de remisiones finalizadas.');
     const details = await client.query('SELECT * FROM remission_items WHERE remission_id=$1 ORDER BY id FOR UPDATE', [id]);
     if (!details.rows.length) throw new Error('La remisión no tiene variedades asignadas.');
     let total = 0;
@@ -607,7 +605,7 @@ async function setRemissionPrices(id, input) {
       const subtotal = Number(row.bunches) * price; total += subtotal;
       await client.query('UPDATE remission_items SET unit_price_bunch=$1, subtotal=$2 WHERE id=$3', [price, subtotal, row.id]);
     }
-    const updated = await client.query("UPDATE remissions SET total=$1,status='FINALIZADA',finalized_at=NOW() WHERE id=$2 RETURNING *", [total, id]);
+    const updated = await client.query("UPDATE remissions SET total=$1,status='FINALIZADA',finalized_at=COALESCE(finalized_at,NOW()) WHERE id=$2 RETURNING *", [total, id]);
     const finalItems = await client.query('SELECT * FROM remission_items WHERE remission_id=$1 ORDER BY id', [id]);
     await client.query('COMMIT');
     return mapRemission(updated.rows[0], finalItems.rows.map(mapRemissionItem));
