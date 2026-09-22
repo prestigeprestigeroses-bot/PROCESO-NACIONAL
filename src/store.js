@@ -43,6 +43,11 @@ function businessToday() {
   return `${part('year')}-${part('month')}-${part('day')}`;
 }
 
+function inventoryStartDate() {
+  const [year, month, day] = businessToday().split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day - 1)).toISOString().slice(0, 10);
+}
+
 function inventoryKey(item) {
   return Buffer.from(JSON.stringify([
     dateOnly(item.date ?? item.sourceDate ?? item.updatedAt),
@@ -228,7 +233,7 @@ async function listInventory() {
     return [...memory.inventory].map(item => {
       const normalized = { ...item, date: dateOnly(item.date ?? item.updatedAt), gradeCm: item.gradeCm || 'NACIONAL' };
       return { ...normalized, id: inventoryKey(normalized), key: inventoryKey(normalized) };
-    }).filter(item => item.date >= businessToday()).sort((a, b) => b.date.localeCompare(a.date) || a.variety.localeCompare(b.variety));
+    }).filter(item => item.date >= inventoryStartDate()).sort((a, b) => b.date.localeCompare(a.date) || a.variety.localeCompare(b.variety));
   }
   const result = await pool.query(`
     WITH source AS (
@@ -241,7 +246,7 @@ async function listInventory() {
              MAX(ts) AS updated_at
       FROM public.scans
       WHERE UPPER(TRIM(grado_cm)) = ANY($1::text[])
-        AND ts::date >= (NOW() AT TIME ZONE $2)::date
+        AND ts::date >= ((NOW() AT TIME ZONE $2)::date - 1)
         AND variedad_nombre IS NOT NULL AND TRIM(variedad_nombre) <> ''
         AND tallos IS NOT NULL AND tallos > 0
       GROUP BY ts::date,TRIM(variedad_nombre),UPPER(TRIM(grado_cm)),tallos
