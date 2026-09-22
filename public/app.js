@@ -101,25 +101,38 @@ function renderInventory() {
 }
 
 function renderVarietyOptions() {
-  const rows = state.inventory.filter(item => state.stepGrade === 'ALL' || item.gradeCm === state.stepGrade);
-  $('#line-variety').innerHTML = '<option value="">Seleccione una variedad</option>' + rows.map(item => `<option value="${item.key}">${escapeHtml(item.variety)} · ${escapeHtml(item.gradeCm)} · ${item.bunches} ${item.bunches === 1 ? 'ramo disponible' : 'ramos disponibles'}</option>`).join('') + (rows.length ? '' : '<option disabled>Sin inventario para este grado</option>');
-  renderVarietyPicker(rows);
+  const groups = remissionVarietyGroups();
+  $('#line-variety').innerHTML = '<option value="">Seleccione una variedad</option>' + groups.map(group => `<option value="${escapeHtml(group.key)}">${escapeHtml(group.variety)} · ${group.availableBunches} ${group.availableBunches === 1 ? 'ramo disponible' : 'ramos disponibles'}</option>`).join('') + (groups.length ? '' : '<option disabled>Sin inventario para este grado</option>');
+  renderVarietyPicker(groups);
   renderStockPreview();
+}
+
+function remissionVarietyGroups() {
+  const groups = new Map();
+  state.inventory.filter(item => state.stepGrade === 'ALL' || item.gradeCm === state.stepGrade).forEach(item => {
+    const key = clientKey(item.variety);
+    const used = state.lines.find(line => line.key === item.key)?.bunches || 0;
+    const group = groups.get(key) || { key, variety: item.variety, availableBunches: 0, grades: new Map() };
+    const available = Math.max(0, Number(item.bunches) - used);
+    group.availableBunches += available;
+    group.grades.set(item.gradeCm, (group.grades.get(item.gradeCm) || 0) + available);
+    groups.set(key, group);
+  });
+  return [...groups.values()].sort((a, b) => a.variety.localeCompare(b.variety));
 }
 
 function renderVarietyPicker(rows) {
   const select = $('#line-variety');
   const selected = rows.find(item => item.key === select.value);
-  const label = selected ? `<strong>${escapeHtml(selected.variety)}</strong><span>${escapeHtml(selected.gradeCm)} · ${selected.bunches} ${selected.bunches === 1 ? 'ramo disponible' : 'ramos disponibles'}</span>` : '<span>Seleccione una variedad</span>';
-  $('#line-variety-picker').innerHTML = `<button class="variety-picker-trigger" type="button" aria-expanded="false">${label}<b>⌄</b></button><div class="variety-picker-menu"><button type="button" class="variety-picker-option" data-line-variety-option=""><span>Seleccione una variedad</span></button>${rows.map(item => `<button type="button" class="variety-picker-option" data-line-variety-option="${escapeHtml(item.key)}"><strong>${escapeHtml(item.variety)}</strong><span>${escapeHtml(item.gradeCm)} · ${item.bunches} ${item.bunches === 1 ? 'ramo disponible' : 'ramos disponibles'}</span></button>`).join('')}</div>`;
+  const description = group => [...group.grades.entries()].map(([grade, bunches]) => `${grade}: ${bunches}`).join(' · ');
+  const label = selected ? `<strong>${escapeHtml(selected.variety)}</strong><span>${description(selected)} · ${selected.availableBunches} ${selected.availableBunches === 1 ? 'ramo disponible' : 'ramos disponibles'}</span>` : '<span>Seleccione una variedad</span>';
+  $('#line-variety-picker').innerHTML = `<button class="variety-picker-trigger" type="button" aria-expanded="false">${label}<b>⌄</b></button><div class="variety-picker-menu"><button type="button" class="variety-picker-option" data-line-variety-option=""><span>Seleccione una variedad</span></button>${rows.map(item => `<button type="button" class="variety-picker-option${item.availableBunches === 0 ? ' is-used' : ''}" data-line-variety-option="${escapeHtml(item.key)}" ${item.availableBunches === 0 ? 'disabled' : ''}><strong>${escapeHtml(item.variety)}</strong><span>${item.availableBunches === 0 ? 'Usada completamente en esta remisión' : `${description(item)} · ${item.availableBunches} ${item.availableBunches === 1 ? 'ramo disponible' : 'ramos disponibles'}`}</span></button>`).join('')}</div>`;
 }
 
 function renderStockPreview() {
-  const item = state.inventory.find(row => row.key === $('#line-variety').value);
-  if (!item) return $('#line-stock-preview').textContent = 'Seleccione una variedad para ver su fecha, grado y disponibilidad.';
-  const price = selectedPrice($('#remission-client-name').value, item.variety, item.gradeCm);
-  const priceText = price ? ` · <b>Precio: ${money(price.pricePerBunch)}</b>` : ' · <b class="selection-over">Sin precio configurado</b>';
-  $('#line-stock-preview').innerHTML = `<strong>${escapeHtml(item.variety)}</strong><span>${escapeHtml(item.gradeCm)} · ${inventoryDate(item.date)} · ${number(item.stemsPerBunch)} tallos por ramo · <b>${number(item.bunches)} ramos disponibles</b>${priceText}</span>`;
+  const item = remissionVarietyGroups().find(row => row.key === $('#line-variety').value);
+  if (!item) return $('#line-stock-preview').textContent = 'Seleccione una variedad para ver su disponibilidad.';
+  $('#line-stock-preview').innerHTML = `<strong>${escapeHtml(item.variety)}</strong><span>${[...item.grades.entries()].map(([grade, bunches]) => `${escapeHtml(grade)}: <b>${number(bunches)} ramos</b>`).join(' · ')} · <b>${number(item.availableBunches)} ramos disponibles</b></span>`;
 }
 
 function renderHistory() {
@@ -329,13 +342,15 @@ function openCancelRemission(id) {
 function renderDocument(data) {
   state.activeRemission = data;
   const company = state.config;
+  const totalBunches = data.items.reduce((sum, item) => sum + Number(item.bunches || 0), 0);
+  const totalStems = data.items.reduce((sum, item) => sum + Number(item.stems || 0), 0);
   const documentElement = $('#printable-document');
   documentElement.dataset.filename = data.remissionNumber;
   documentElement.innerHTML = `
     ${data.status === 'ANULADA' ? '<div class="doc-canceled-mark">ANULADA</div>' : ''}
     <header class="doc-head"><div class="doc-brand"><span class="brand-logo brand-logo--document"><img src="/logo-prestige.jpeg" alt="Prestige Roses"></span><div><h2>${escapeHtml(company.companyName)}</h2><p>${escapeHtml(company.companyNit ? `NIT: ${company.companyNit}` : 'Salida nacional de flor')}</p></div></div><div class="doc-number"><span>REMISIÓN</span><strong>${escapeHtml(data.remissionNumber)}</strong><p>${dateTime(data.createdAt)}</p></div></header>
     <section class="doc-client"><div class="doc-field"><span>Cliente</span><strong>${escapeHtml(data.clientName)}</strong></div><div class="doc-field"><span>NIT / Documento</span><strong>${escapeHtml(data.clientDocument || '—')}</strong></div><div class="doc-field"><span>Entregado por</span><strong>${escapeHtml(data.deliveredBy || '—')}</strong></div></section>
-    <table class="doc-table"><thead><tr><th>Variedad</th><th>Grado</th><th>Tallos/ramo</th><th>Ramos</th><th>Total tallos</th><th>Precio ramo</th><th>Subtotal</th></tr></thead><tbody>${data.items.map(item => `<tr><td><strong>${escapeHtml(item.variety)}</strong></td><td>${escapeHtml(item.gradeCm || '—')}</td><td>${number(item.stemsPerBunch)}</td><td>${number(item.bunches)}</td><td>${number(item.stems)}</td><td>${state.editingDocumentPrices ? `<input class="doc-price-input" type="number" min="1" step="1" value="${Number(item.unitPriceBunch)}" data-document-price="${item.id}" aria-label="Precio por ramo de ${escapeHtml(item.variety)}">` : money(item.unitPriceBunch)}</td><td>${money(item.subtotal)}</td></tr>`).join('')}</tbody></table>
+    <table class="doc-table"><thead><tr><th>Variedad</th><th>Grado</th><th>Tallos/ramo</th><th>Ramos</th><th>Total tallos</th><th>Precio ramo</th><th>Subtotal</th></tr></thead><tbody>${data.items.map(item => `<tr><td><strong>${escapeHtml(item.variety)}</strong></td><td>${escapeHtml(item.gradeCm || '—')}</td><td>${number(item.stemsPerBunch)}</td><td>${number(item.bunches)}</td><td>${number(item.stems)}</td><td>${state.editingDocumentPrices ? `<input class="doc-price-input" type="number" min="1" step="1" value="${Number(item.unitPriceBunch)}" data-document-price="${item.id}" aria-label="Precio por ramo de ${escapeHtml(item.variety)}">` : money(item.unitPriceBunch)}</td><td>${money(item.subtotal)}</td></tr>`).join('')}</tbody><tfoot><tr class="doc-table-totals"><td colspan="3"><strong>TOTALES</strong></td><td><strong>${number(totalBunches)} ramos</strong></td><td><strong>${number(totalStems)} tallos</strong></td><td></td><td><strong>${money(data.total)}</strong></td></tr></tfoot></table>
     <div class="doc-total"><span>TOTAL</span><span>${money(data.total)}</span></div>
     ${data.notes ? `<div class="doc-notes"><strong>Observaciones:</strong> ${escapeHtml(data.notes)}</div>` : ''}
     ${data.status === 'ANULADA' ? `<div class="doc-cancellation"><strong>Remisión anulada:</strong> ${escapeHtml(data.cancellationReason || 'Sin motivo registrado')} · ${data.canceledAt ? dateTime(data.canceledAt) : ''}</div>` : ''}
@@ -415,7 +430,7 @@ document.addEventListener('click', async event => {
     varietyPickerToggle.setAttribute('aria-expanded', String(open));
   } else if (varietyPickerOption) {
     $('#line-variety').value = varietyPickerOption.dataset.lineVarietyOption;
-    renderVarietyPicker(state.inventory.filter(item => state.stepGrade === 'ALL' || item.gradeCm === state.stepGrade));
+    renderVarietyPicker(remissionVarietyGroups());
     renderStockPreview();
   } else if (!event.target.closest('#line-variety-picker')) {
     $('#line-variety-picker')?.classList.remove('is-open');
@@ -459,17 +474,26 @@ document.addEventListener('click', async event => {
 });
 
 $('#add-line-button').addEventListener('click', () => {
-  const item = state.inventory.find(row => row.key === $('#line-variety').value);
+  const item = remissionVarietyGroups().find(row => row.key === $('#line-variety').value);
   const bunches = Math.max(0, Number.parseInt($('#line-bunches').value, 10) || 0);
   const error = $('#line-error'); error.textContent = '';
   if (!item) return error.textContent = 'Seleccione una variedad.';
   if (!bunches) return error.textContent = 'Ingrese al menos un ramo.';
-  const price = selectedPrice($('#remission-client-name').value, item.variety, item.gradeCm);
-  if (!price) return error.textContent = `No hay precio para ${item.variety} · ${item.gradeCm}. Regístrelo en Lista de precios.`;
-  if (bunches > item.bunches) return error.textContent = `Disponibles: ${item.bunches} ramos.`;
-  if (state.lines.some(row => row.key === item.key)) return error.textContent = 'Este grupo ya está agregado.';
-  const unitPriceBunch = price.pricePerBunch;
-  state.lines.push({ key: item.key, date: item.date, variety: item.variety, gradeCm: item.gradeCm, stemsPerBunch: item.stemsPerBunch, bunches, stems: bunches * item.stemsPerBunch, unitPriceBunch, subtotal: bunches * unitPriceBunch });
+  if (bunches > item.availableBunches) return error.textContent = `Disponibles: ${item.availableBunches} ramos.`;
+  let pending = bunches;
+  const sourceRows = state.inventory.filter(row => clientKey(row.variety) === item.key && (state.stepGrade === 'ALL' || row.gradeCm === state.stepGrade)).sort((a, b) => a.date.localeCompare(b.date));
+  const missingPrice = sourceRows.find(source => Math.max(0, source.bunches - (state.lines.find(row => row.key === source.key)?.bunches || 0)) > 0 && !selectedPrice($('#remission-client-name').value, source.variety, source.gradeCm));
+  if (missingPrice) return error.textContent = `No hay precio para ${missingPrice.variety} · ${missingPrice.gradeCm}. Regístrelo en Lista de precios.`;
+  for (const source of sourceRows) {
+    const existing = state.lines.find(row => row.key === source.key);
+    const available = Math.max(0, source.bunches - (existing?.bunches || 0));
+    if (!available || !pending) continue;
+    const price = selectedPrice($('#remission-client-name').value, source.variety, source.gradeCm);
+    const use = Math.min(pending, available);
+    if (existing) { existing.bunches += use; existing.stems = existing.bunches * existing.stemsPerBunch; existing.subtotal = existing.bunches * existing.unitPriceBunch; }
+    else state.lines.push({ key: source.key, date: source.date, variety: source.variety, gradeCm: source.gradeCm, stemsPerBunch: source.stemsPerBunch, bunches: use, stems: use * source.stemsPerBunch, unitPriceBunch: price.pricePerBunch, subtotal: use * price.pricePerBunch });
+    pending -= use;
+  }
   $('#remission-error').textContent = '';
   $('#line-variety').value = ''; $('#line-bunches').value = 1; renderVarietyOptions(); renderLines();
 });
