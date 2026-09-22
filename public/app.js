@@ -59,17 +59,29 @@ function dateFilteredInventory() {
   });
 }
 
+function groupedInventory(rows) {
+  const groups = new Map();
+  rows.forEach(item => {
+    const key = `${clientKey(item.variety)}|${item.gradeCm}`;
+    const group = groups.get(key) || { variety: item.variety, gradeCm: item.gradeCm, bunches: 0, stems: 0 };
+    group.bunches += Number(item.bunches || 0);
+    group.stems += Number(item.stems || 0);
+    groups.set(key, group);
+  });
+  return [...groups.values()].map(item => ({ ...item, stemsPerBunch: item.bunches ? item.stems / item.bunches : 0 })).sort((a, b) => a.variety.localeCompare(b.variety) || a.gradeCm.localeCompare(b.gradeCm));
+}
+
 function renderDashboard(totals = state.totals) {
   const visibleInventory = dateFilteredInventory();
   $('#metric-varieties').textContent = number(new Set(visibleInventory.map(item => item.variety)).size);
   $('#metric-bunches').textContent = number(visibleInventory.reduce((sum, item) => sum + item.bunches, 0));
   $('#metric-stems').textContent = number(visibleInventory.reduce((sum, item) => sum + item.stems, 0));
   $('#metric-sales').textContent = money(totals.todaySales);
-  $('#dashboard-inventory').innerHTML = visibleInventory.slice(0, 7).map(item => `<tr>
-    <td class="date-cell">${inventoryDate(item.date)}</td><td><div class="variety-cell">${escapeHtml(item.variety)}</div></td>
+  $('#dashboard-inventory').innerHTML = groupedInventory(visibleInventory).slice(0, 7).map(item => `<tr>
+    <td><div class="variety-cell">${escapeHtml(item.variety)}</div></td>
     <td><span class="grade-chip">${escapeHtml(item.gradeCm)}</span></td><td class="quantity">${number(item.stemsPerBunch)}</td>
     <td class="quantity">${number(item.bunches)}</td><td class="quantity">${number(item.stems)}</td>
-  </tr>`).join('') || '<tr><td colspan="6">No hay registros BAJAS, NACIONAL o NACIONAL GRANEL disponibles.</td></tr>';
+  </tr>`).join('') || '<tr><td colspan="5">No hay registros BAJAS, NACIONAL o NACIONAL GRANEL disponibles.</td></tr>';
   $('#dashboard-remissions').innerHTML = state.remissions.slice(0, 6).map(item => `<button class="activity-item text-button" data-remission-action="${statusMeta(item.status).action}" data-remission-id="${item.id}">
     <span class="activity-icon">↗</span><span><strong>${escapeHtml(item.clientName)}</strong><span>${escapeHtml(item.remissionNumber)} · ${statusMeta(item.status).label}</span></span><b class="activity-amount">${item.status === 'FINALIZADA' ? money(item.total) : bunchLabel(item.requestedBunches)}</b>
   </button>`).join('') || '<div class="empty-state"><strong>Aún no hay salidas</strong><span>La actividad aparecerá aquí.</span></div>';
@@ -77,9 +89,10 @@ function renderDashboard(totals = state.totals) {
 
 function renderInventory() {
   const query = ($('#inventory-search').value || '').toLowerCase();
-  const rows = dateFilteredInventory().filter(item => `${item.date} ${item.variety} ${item.gradeCm}`.toLowerCase().includes(query));
+  const sourceRows = dateFilteredInventory().filter(item => `${item.date} ${item.variety} ${item.gradeCm}`.toLowerCase().includes(query));
+  const rows = groupedInventory(sourceRows);
   $('#inventory-body').innerHTML = rows.map(item => `<tr>
-    <td class="date-cell">${inventoryDate(item.date)}</td><td><div class="variety-cell">${escapeHtml(item.variety)}</div></td>
+    <td><div class="variety-cell">${escapeHtml(item.variety)}</div></td>
     <td><span class="grade-chip">${escapeHtml(item.gradeCm)}</span></td><td class="quantity">${number(item.stemsPerBunch)}</td>
     <td class="quantity">${number(item.bunches)}</td><td class="quantity">${number(item.stems)}</td>
   </tr>`).join('');
