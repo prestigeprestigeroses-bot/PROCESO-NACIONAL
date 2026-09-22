@@ -106,7 +106,8 @@ async function init() {
     );
     CREATE TABLE IF NOT EXISTS remissions (
       id BIGSERIAL PRIMARY KEY,
-      remission_number VARCHAR(30) NOT NULL UNIQUE,
+      remission_number VARCHAR(30) UNIQUE,
+      original_remission_number VARCHAR(30),
       client_name VARCHAR(160) NOT NULL,
       client_document VARCHAR(80) NOT NULL DEFAULT '',
       client_phone VARCHAR(50) NOT NULL DEFAULT '',
@@ -154,6 +155,8 @@ async function init() {
     ALTER TABLE inventory ADD COLUMN IF NOT EXISTS price_per_bunch NUMERIC(12,2) NOT NULL DEFAULT 0;
     ALTER TABLE inventory ADD COLUMN IF NOT EXISTS price_per_stem NUMERIC(12,2) NOT NULL DEFAULT 0;
     ALTER TABLE inventory ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    ALTER TABLE remissions ALTER COLUMN remission_number DROP NOT NULL;
+    ALTER TABLE remissions ADD COLUMN IF NOT EXISTS original_remission_number VARCHAR(30);
     ALTER TABLE remission_items ADD COLUMN IF NOT EXISTS source_date DATE;
     ALTER TABLE remission_items ADD COLUMN IF NOT EXISTS grade_cm VARCHAR(40);
     ALTER TABLE remission_items ADD COLUMN IF NOT EXISTS stems_per_bunch INTEGER;
@@ -209,7 +212,8 @@ function mapInventory(row) {
 function mapRemission(row, items = []) {
   return {
     id: Number(row.id),
-    remissionNumber: row.remission_number ?? row.remissionNumber,
+    remissionNumber: row.remission_number !== undefined ? row.remission_number : (row.remissionNumber ?? null),
+    originalRemissionNumber: row.original_remission_number ?? row.originalRemissionNumber ?? null,
     clientName: row.client_name ?? row.clientName,
     clientDocument: row.client_document ?? row.clientDocument,
     clientPhone: row.client_phone ?? row.clientPhone,
@@ -446,6 +450,46 @@ function nextNumber(sequence, date = new Date()) {
   return `REM-${date.getFullYear()}-${String(sequence).padStart(5, '0')}`;
 }
 
+async function renumberRemissions(client = null) {
+  if (!usePostgres) {
+    const counts = new Map();
+    [...memory.remissions].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt) || a.id - b.id).forEach(row => {
+      row.originalRemissionNumber ||= row.remissionNumber;
+      if (row.status === 'ANULADA') { row.remissionNumber = null; return; }
+      if (row.status !== 'FINALIZADA') return;
+      const year = new Date(row.createdAt).getFullYear();
+      const count = (counts.get(year) || 0) + 1;
+      counts.set(year, count);
+      row.remissionNumber = `REM-${year}-${String(count).padStart(5, '0')}`;
+    });
+    persistMemory();
+    return memory.remissions.map(row => ({ id: row.id, remissionNumber: row.remissionNumber, originalRemissionNumber: row.originalRemissionNumber }));
+  }
+  const connection = client || await pool.connect();
+  try {
+    if (!client) await connection.query('BEGIN');
+    await connection.query('LOCK TABLE remissions IN EXCLUSIVE MODE');
+    const result = await connection.query(`SELECT id,status,remission_number,original_remission_number,
+      EXTRACT(YEAR FROM created_at AT TIME ZONE $1)::int AS business_year
+      FROM remissions ORDER BY created_at,id`, [businessTimeZone]);
+    await connection.query('UPDATE remissions SET original_remission_number=remission_number WHERE original_remission_number IS NULL AND remission_number IS NOT NULL');
+    await connection.query("UPDATE remissions SET remission_number=NULL WHERE status='ANULADA'");
+    await connection.query("UPDATE remissions SET remission_number='TMP-' || id WHERE status='FINALIZADA'");
+    const counts = new Map();
+    for (const row of result.rows) {
+      if (row.status !== 'FINALIZADA') continue;
+      const count = (counts.get(row.business_year) || 0) + 1;
+      counts.set(row.business_year, count);
+      await connection.query('UPDATE remissions SET remission_number=$1 WHERE id=$2', [`REM-${row.business_year}-${String(count).padStart(5, '0')}`, row.id]);
+    }
+    if (!client) await connection.query('COMMIT');
+    return result.rows.map(row => ({ id: Number(row.id), previousNumber: row.remission_number, status: row.status, businessYear: row.business_year }));
+  } catch (error) {
+    if (!client) await connection.query('ROLLBACK');
+    throw error;
+  } finally { if (!client) connection.release(); }
+}
+
 function bunchText(value) {
   return `${value} ${Number(value) === 1 ? 'ramo' : 'ramos'}`;
 }
@@ -475,7 +519,9 @@ async function createRemission(input) {
     const total = detailRows.reduce((sum, row) => sum + row.subtotal, 0);
     const id = memory.nextRemissionId++;
     const now = new Date().toISOString();
-    const remission = { id, remissionNumber: nextNumber(id), ...details, requestedBunches, requestedStems, total, status: 'FINALIZADA', finalizedAt: now, createdAt: now, items: detailRows };
+    const year = new Date(now).getFullYear();
+    const next = memory.remissions.filter(row => row.status === 'FINALIZADA' && new Date(row.createdAt).getFullYear() === year).length + 1;
+    const remission = { id, remissionNumber: nextNumber(next), ...details, requestedBunches, requestedStems, total, status: 'FINALIZADA', finalizedAt: now, createdAt: now, items: detailRows };
     selected.forEach(({ stock, requested, decoded }) => { stock.bunches -= requested.bunches; stock.stems -= requested.bunches * decoded.stemsPerBunch; });
     memory.remissions.unshift(remission);
     persistMemory();
@@ -484,6 +530,7 @@ async function createRemission(input) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await client.query('LOCK TABLE remissions IN EXCLUSIVE MODE');
     const detailRows = [];
     for (const requested of items) {
       const selected = decodeInventoryKey(requested.key);
@@ -507,10 +554,13 @@ async function createRemission(input) {
     const total = detailRows.reduce((sum, row) => sum + row.subtotal, 0);
     const sequenceResult = await client.query("SELECT nextval(pg_get_serial_sequence('remissions','id')) AS id");
     const id = Number(sequenceResult.rows[0].id);
+    const businessYear = Number(businessToday().slice(0, 4));
+    const numberResult = await client.query("SELECT COUNT(*)::int AS count FROM remissions WHERE status='FINALIZADA' AND EXTRACT(YEAR FROM created_at AT TIME ZONE $1)::int=$2", [businessTimeZone, businessYear]);
+    const remissionNumber = `REM-${businessYear}-${String(Number(numberResult.rows[0].count) + 1).padStart(5, '0')}`;
     const header = await client.query(
       `INSERT INTO remissions (id,remission_number,client_name,client_document,client_phone,destination,delivered_by,notes,total,status,requested_bunches,requested_stems,finalized_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'FINALIZADA',$10,$11,NOW()) RETURNING *`,
-      [id, nextNumber(id), details.clientName, details.clientDocument, details.clientPhone, details.destination, details.deliveredBy, details.notes, total, requestedBunches, requestedStems]
+      [id, remissionNumber, details.clientName, details.clientDocument, details.clientPhone, details.destination, details.deliveredBy, details.notes, total, requestedBunches, requestedStems]
     );
     const savedItems = [];
     for (const row of detailRows) {
@@ -632,18 +682,23 @@ async function cancelRemission(id, input) {
       }
     }
     remission.status = 'ANULADA'; remission.cancellationReason = reason; remission.canceledAt = new Date().toISOString();
-    persistMemory(); return remission;
+    await renumberRemissions(); return remission;
   }
-  const result = await pool.query(
-    `UPDATE remissions SET status='ANULADA',cancellation_reason=$1,canceled_at=NOW()
-     WHERE id=$2 AND status <> 'ANULADA' RETURNING *`,
-    [reason, id]
-  );
-  if (!result.rows[0]) {
-    const exists = await pool.query('SELECT status FROM remissions WHERE id=$1', [id]);
-    if (!exists.rows[0]) throw new Error('Remisión no encontrada.');
-    throw new Error('Esta remisión ya está anulada.');
-  }
+  const connection = await pool.connect();
+  try {
+    await connection.query('BEGIN');
+    await connection.query('LOCK TABLE remissions IN EXCLUSIVE MODE');
+    const result = await connection.query(
+      `UPDATE remissions SET status='ANULADA',cancellation_reason=$1,canceled_at=NOW()
+       WHERE id=$2 AND status <> 'ANULADA' RETURNING *`, [reason, id]);
+    if (!result.rows[0]) {
+      const exists = await connection.query('SELECT status FROM remissions WHERE id=$1', [id]);
+      throw new Error(exists.rows[0] ? 'Esta remisión ya está anulada.' : 'Remisión no encontrada.');
+    }
+    await renumberRemissions(connection);
+    await connection.query('COMMIT');
+  } catch (error) { await connection.query('ROLLBACK'); throw error; }
+  finally { connection.release(); }
   return getRemission(id);
 }
 
@@ -696,4 +751,4 @@ async function salesReport(from, to) {
   return result.rows.map(row => ({ remissionNumber: row.remission_number, createdAt: row.created_at, clientName: row.client_name, variety: row.variety, gradeCm: row.grade_cm, bunches: Number(row.bunches), stems: Number(row.stems), unitPriceBunch: Number(row.unit_price_bunch), subtotal: Number(row.subtotal) }));
 }
 
-module.exports = { init, listInventory, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, assignRemissionItems, setRemissionPrices, cancelRemission, listRemissions, getRemission, dashboard, salesReport, usePostgres };
+module.exports = { init, listInventory, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, assignRemissionItems, setRemissionPrices, cancelRemission, renumberRemissions, listRemissions, getRemission, dashboard, salesReport, usePostgres };
