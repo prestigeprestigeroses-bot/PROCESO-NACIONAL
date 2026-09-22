@@ -2,6 +2,7 @@ require('dotenv').config();
 const crypto = require('node:crypto');
 const path = require('node:path');
 const express = require('express');
+const XLSX = require('xlsx');
 const store = require('./src/store');
 
 const app = express();
@@ -9,6 +10,7 @@ const port = Number(process.env.PORT) || 3000;
 const production = process.env.NODE_ENV === 'production';
 const appUser = process.env.APP_USER || 'administrador';
 const appPassword = process.env.APP_PASSWORD || 'admin123';
+const reportsPassword = process.env.REPORTS_PASSWORD || appPassword;
 const sessionSecret = process.env.SESSION_SECRET || (production ? '' : 'desarrollo-local-flora-remisiones');
 
 if (production && (!process.env.APP_USER || !process.env.APP_PASSWORD || !sessionSecret)) {
@@ -35,6 +37,21 @@ function createSession() {
   return `${payload}.${sign(payload)}`;
 }
 
+function createReportsSession() {
+  const payload = Buffer.from(JSON.stringify({ scope: 'reports', expires: Date.now() + 30 * 60 * 1000 })).toString('base64url');
+  return `${payload}.${sign(payload)}`;
+}
+
+function hasReportsAccess(request) {
+  const token = parseCookies(request).flora_reports;
+  if (!token) return false;
+  const [payload, signature] = token.split('.');
+  if (!payload || !signature) return false;
+  const expected = sign(payload);
+  if (signature.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return false;
+  try { const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')); return data.scope === 'reports' && data.expires > Date.now(); } catch { return false; }
+}
+
 function isAuthenticated(request) {
   const token = parseCookies(request).flora_session;
   if (!token) return false;
@@ -53,6 +70,12 @@ function requireAuth(request, response, next) {
   next();
 }
 
+function requireReportsAccess(request, response, next) {
+  if (!isAuthenticated(request)) return response.status(401).json({ error: 'Sesión vencida. Inicie sesión nuevamente.' });
+  if (!hasReportsAccess(request)) return response.status(403).json({ error: 'Ingrese la contraseña de informes para continuar.' });
+  next();
+}
+
 app.get('/api/health', (_request, response) => response.json({ ok: true, database: store.usePostgres ? 'postgresql' : 'local' }));
 app.get('/api/auth/session', (request, response) => response.json({ authenticated: isAuthenticated(request), user: isAuthenticated(request) ? appUser : null }));
 app.post('/api/auth/login', (request, response) => {
@@ -65,7 +88,15 @@ app.post('/api/auth/login', (request, response) => {
   response.json({ ok: true, user: appUser });
 });
 app.post('/api/auth/logout', (_request, response) => {
-  response.setHeader('Set-Cookie', `flora_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${production ? '; Secure' : ''}`);
+  response.setHeader('Set-Cookie', [`flora_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${production ? '; Secure' : ''}`, `flora_reports=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${production ? '; Secure' : ''}`]);
+  response.json({ ok: true });
+});
+
+app.post('/api/reports/unlock', requireAuth, (request, response) => {
+  const candidate = Buffer.from(String(request.body.password || ''));
+  const expected = Buffer.from(reportsPassword);
+  if (candidate.length !== expected.length || !crypto.timingSafeEqual(candidate, expected)) return response.status(401).json({ error: 'Contraseña de informes incorrecta.' });
+  response.setHeader('Set-Cookie', `flora_reports=${encodeURIComponent(createReportsSession())}; Path=/; HttpOnly; SameSite=Strict; Max-Age=1800${production ? '; Secure' : ''}`);
   response.json({ ok: true });
 });
 
@@ -77,6 +108,30 @@ app.get('/api/config', requireAuth, (_request, response) => response.json({
   companyEmail: process.env.COMPANY_EMAIL || 'administracion@prestigeroses.com · ventas@prestigeroses.com'
 }));
 app.get('/api/dashboard', requireAuth, async (_request, response, next) => { try { response.json(await store.dashboard()); } catch (error) { next(error); } });
+app.get('/api/reports/sales', requireReportsAccess, async (request, response, next) => { try { response.json(await store.salesReport(request.query.from, request.query.to)); } catch (error) { next(error); } });
+app.get('/api/reports/sales.xlsx', requireReportsAccess, async (request, response, next) => {
+  try {
+    const rows = await store.salesReport(request.query.from, request.query.to);
+    const byVariety = new Map(); const byGrade = new Map();
+    rows.forEach(row => {
+      const varietyKey = `${row.variety}|${row.gradeCm}`;
+      const variety = byVariety.get(varietyKey) || { Variedad: row.variety, Grado: row.gradeCm, Ramos: 0, Tallos: 0, 'Total COP': 0 };
+      variety.Ramos += row.bunches; variety.Tallos += row.stems; variety['Total COP'] += row.subtotal; byVariety.set(varietyKey, variety);
+      const grade = byGrade.get(row.gradeCm) || { Grado: row.gradeCm, Ramos: 0, Tallos: 0, 'Total COP': 0 };
+      grade.Ramos += row.bunches; grade.Tallos += row.stems; grade['Total COP'] += row.subtotal; byGrade.set(row.gradeCm, grade);
+    });
+    const total = rows.reduce((sum, row) => sum + row.subtotal, 0);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([{ 'Desde': request.query.from, 'Hasta': request.query.to, 'Total vendido COP': total, 'Ramos vendidos': rows.reduce((sum, row) => sum + row.bunches, 0), 'Tallos vendidos': rows.reduce((sum, row) => sum + row.stems, 0) }]), 'Resumen');
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([...byVariety.values()]), 'Por variedad');
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([...byGrade.values()]), 'Por grado');
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows.map(row => ({ Fecha: new Date(row.createdAt).toLocaleDateString('es-CO'), Remisión: row.remissionNumber, Cliente: row.clientName, Variedad: row.variety, Grado: row.gradeCm, Ramos: row.bunches, Tallos: row.stems, 'Precio ramo COP': row.unitPriceBunch, 'Total COP': row.subtotal }))), 'Detalle remisiones');
+    const output = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    response.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    response.setHeader('Content-Disposition', `attachment; filename="informe-ventas-${request.query.from}-a-${request.query.to}.xlsx"`);
+    response.send(output);
+  } catch (error) { next(error); }
+});
 app.get('/api/inventory', requireAuth, async (_request, response, next) => { try { response.json(await store.listInventory()); } catch (error) { next(error); } });
 app.get('/api/price-lists', requireAuth, async (_request, response, next) => { try { response.json(await store.listPriceLists()); } catch (error) { next(error); } });
 app.put('/api/price-lists', requireAuth, async (request, response, next) => { try { response.json(await store.savePriceList(request.body)); } catch (error) { next(error); } });

@@ -678,4 +678,22 @@ async function dashboard() {
   };
 }
 
-module.exports = { init, listInventory, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, assignRemissionItems, setRemissionPrices, cancelRemission, listRemissions, getRemission, dashboard, usePostgres };
+async function salesReport(from, to) {
+  const start = String(from || '').slice(0, 10);
+  const end = String(to || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || start > end) throw new Error('Seleccione un rango de fechas válido.');
+  if (!usePostgres) {
+    return memory.remissions.filter(row => row.status === 'FINALIZADA' && dateOnly(row.createdAt) >= start && dateOnly(row.createdAt) <= end).flatMap(remission => (remission.items || []).map(item => ({ remissionNumber: remission.remissionNumber, createdAt: remission.createdAt, clientName: remission.clientName, ...item })));
+  }
+  const result = await pool.query(`
+    SELECT r.remission_number,r.created_at,r.client_name,
+           ri.variety,ri.grade_cm,ri.bunches,ri.stems,ri.unit_price_bunch,ri.subtotal
+    FROM remissions r
+    JOIN remission_items ri ON ri.remission_id=r.id
+    WHERE r.status='FINALIZADA'
+      AND (r.created_at AT TIME ZONE $3)::date BETWEEN $1::date AND $2::date
+    ORDER BY r.created_at DESC,ri.variety`, [start, end, businessTimeZone]);
+  return result.rows.map(row => ({ remissionNumber: row.remission_number, createdAt: row.created_at, clientName: row.client_name, variety: row.variety, gradeCm: row.grade_cm, bunches: Number(row.bunches), stems: Number(row.stems), unitPriceBunch: Number(row.unit_price_bunch), subtotal: Number(row.subtotal) }));
+}
+
+module.exports = { init, listInventory, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, assignRemissionItems, setRemissionPrices, cancelRemission, listRemissions, getRemission, dashboard, salesReport, usePostgres };

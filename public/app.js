@@ -1,5 +1,5 @@
 const varieties = ['FREEDOM', 'PINK FLOYD', 'MONDIAL', 'HUMMER', 'MOMENTUM', 'CORAL REEF', 'QUICK SAND', 'HILUX', 'CANDLELIGHT', 'DEEP PURPLE', 'SUMMERSAND', 'STAR PLATINUM', 'SHIMMER', 'PINK OHARA', 'WHITE OHARA', 'PINK MONDIAL', 'BLESSING', 'PINK AMARETO', 'TIFFANY', 'YELLOW BIKINI', 'QUEEN BERRY', 'MOODY BLUE', 'SWAN', 'HIGH MAGIC', 'EXPLORER', 'DANCING RED', 'VENDELA'];
-const state = { inventory: [], remissions: [], prices: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), lines: [], activeRemission: null, editingDocumentPrices: false, stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
+const state = { inventory: [], remissions: [], prices: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const money = value => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', currencyDisplay: 'code', maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -226,14 +226,59 @@ function addRemainingPriceDrafts() {
 }
 
 function switchView(view) {
+  if (view === 'reports' && !state.reportsUnlocked) {
+    $('#reports-access-error').textContent = '';
+    $('#reports-password').value = '';
+    $('#reports-access-dialog').showModal();
+    return;
+  }
   state.activeView = view;
   $$('.view').forEach(element => element.classList.toggle('active', element.id === `view-${view}`));
   $$('.nav-link').forEach(element => element.classList.toggle('active', element.dataset.view === view));
-  const titles = { dashboard: 'Resumen', inventory: 'Inventario', prices: 'Lista de precios', 'new-remission': 'Nueva remisión', history: 'Historial' };
+  const titles = { dashboard: 'Resumen', inventory: 'Inventario', prices: 'Lista de precios', 'new-remission': 'Nueva remisión', history: 'Historial', reports: 'Informes' };
   $('#view-title').textContent = titles[view];
   $('#sidebar').classList.remove('open');
   window.scrollTo({ top: 0, behavior: 'smooth' });
   if (view === 'history') loadFullHistory();
+}
+
+function reportGroups(rows) {
+  const groups = new Map();
+  rows.forEach(row => {
+    const key = `${clientKey(row.variety)}|${row.gradeCm}`;
+    const group = groups.get(key) || { variety: row.variety, gradeCm: row.gradeCm, bunches: 0, stems: 0, subtotal: 0 };
+    group.bunches += Number(row.bunches || 0); group.stems += Number(row.stems || 0); group.subtotal += Number(row.subtotal || 0);
+    groups.set(key, group);
+  });
+  return [...groups.values()].sort((a, b) => a.variety.localeCompare(b.variety) || a.gradeCm.localeCompare(b.gradeCm));
+}
+
+function renderReport() {
+  const rows = state.reportRows;
+  const total = rows.reduce((sum, row) => sum + Number(row.subtotal || 0), 0);
+  const bunches = rows.reduce((sum, row) => sum + Number(row.bunches || 0), 0);
+  const stems = rows.reduce((sum, row) => sum + Number(row.stems || 0), 0);
+  $('#report-money').textContent = money(total); $('#report-bunches').textContent = number(bunches); $('#report-stems').textContent = number(stems);
+  $('#report-grades').innerHTML = ['NACIONAL', 'BAJAS', 'NACIONAL GRANEL'].map(grade => {
+    const subset = rows.filter(row => row.gradeCm === grade);
+    return `<article class="report-grade"><span>${escapeHtml(grade)}</span><strong>${number(subset.reduce((sum, row) => sum + Number(row.stems || 0), 0))} tallos</strong><small>${number(subset.reduce((sum, row) => sum + Number(row.bunches || 0), 0))} ramos · ${money(subset.reduce((sum, row) => sum + Number(row.subtotal || 0), 0))}</small></article>`;
+  }).join('');
+  const groups = reportGroups(rows);
+  $('#report-body').innerHTML = groups.map(row => `<tr><td><strong>${escapeHtml(row.variety)}</strong></td><td><span class="grade-chip">${escapeHtml(row.gradeCm)}</span></td><td class="quantity">${number(row.bunches)}</td><td class="quantity">${number(row.stems)}</td><td class="money"><strong>${money(row.subtotal)}</strong></td></tr>`).join('');
+  $('#report-empty').classList.toggle('is-hidden', groups.length > 0);
+  if (!groups.length) $('#report-empty').innerHTML = '<strong>Sin ventas finalizadas</strong><span>No hay remisiones finalizadas en el período elegido.</span>';
+}
+
+async function generateReport() {
+  const from = $('#report-from').value; const to = $('#report-to').value;
+  if (!from || !to) return toast('Seleccione las dos fechas para generar el informe.');
+  try { state.reportRows = await api(`/api/reports/sales?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`); renderReport(); }
+  catch (error) { toast(error.message); }
+}
+
+function exportReport() {
+  if (!state.reportRows.length) return toast('Genere primero un informe con ventas para exportarlo.');
+  window.location.href = `/api/reports/sales.xlsx?from=${encodeURIComponent($('#report-from').value)}&to=${encodeURIComponent($('#report-to').value)}`;
 }
 
 async function loadFullHistory() {
@@ -485,6 +530,20 @@ $('#cancel-remission-form').addEventListener('submit', async event => {
 });
 
 $('#clear-remission').addEventListener('click', clearRemission);
+$('#reports-access-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = event.submitter; const error = $('#reports-access-error'); error.textContent = '';
+  button.disabled = true;
+  try {
+    await api('/api/reports/unlock', { method: 'POST', body: JSON.stringify({ password: $('#reports-password').value }) });
+    state.reportsUnlocked = true;
+    $('#reports-access-dialog').close();
+    switchView('reports');
+  } catch (requestError) { error.textContent = requestError.message; }
+  finally { button.disabled = false; }
+});
+$('#generate-report').addEventListener('click', generateReport);
+$('#export-report').addEventListener('click', exportReport);
 $('#close-document').addEventListener('click', () => $('#remission-dialog').close());
 $('#edit-document-prices').addEventListener('click', () => {
   if (!state.activeRemission) return;
@@ -519,6 +578,8 @@ $('#print-document').addEventListener('click', () => {
 });
 
 (async function init() {
+  const today = new Date().toISOString().slice(0, 10);
+  $('#report-from').value = today; $('#report-to').value = today;
   try { const session = await api('/api/auth/session'); if (session.authenticated) await showApp(); else showLogin(); }
   catch { showLogin(); }
 })();

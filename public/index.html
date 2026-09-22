@@ -45,6 +45,7 @@
         <button class="nav-link" data-view="prices"><span class="nav-icon">$</span>Lista de precios</button>
         <button class="nav-link" data-view="new-remission"><span class="nav-icon">＋</span>Nueva remisión</button>
         <button class="nav-link" data-view="history"><span class="nav-icon">≡</span>Historial</button>
+        <button class="nav-link" data-view="reports"><span class="nav-icon">▤</span>Informes</button>
       </nav>
       <div class="sidebar-foot">
         <div class="live-badge"><span></span> Base de datos activa</div>
@@ -168,6 +169,14 @@
             <div class="empty-state is-hidden" id="history-empty"><strong>No hay remisiones</strong><span>Los pedidos creados aparecerán aquí.</span></div>
           </article>
         </section>
+
+        <section class="view" id="view-reports">
+          <div class="section-heading"><div><h2>Informes de ventas</h2><p>Información consolidada de remisiones finalizadas.</p></div><span class="live-chip">ACCESO RESTRINGIDO</span></div>
+          <article class="panel report-filter-panel"><div class="toolbar-filters"><label class="date-filter">Desde<input type="date" id="report-from"></label><label class="date-filter">Hasta<input type="date" id="report-to"></label><button class="button button--primary" type="button" id="generate-report">Generar informe</button><button class="button button--dark" type="button" id="export-report">Exportar a Excel</button></div></article>
+          <div class="metric-grid report-metrics"><article class="metric metric--green"><span class="metric-label">TOTAL VENDIDO</span><strong id="report-money">COP $0</strong><small>remisiones finalizadas</small></article><article class="metric metric--gold"><span class="metric-label">RAMOS VENDIDOS</span><strong id="report-bunches">0</strong><small>en el período</small></article><article class="metric metric--coral"><span class="metric-label">TALLOS VENDIDOS</span><strong id="report-stems">0</strong><small>en el período</small></article></div>
+          <div class="report-grade-grid" id="report-grades"></div>
+          <article class="panel panel--table"><div class="panel-head"><div><h3>Ventas por variedad y grado</h3><p>Valores finales aplicados en las remisiones.</p></div></div><div class="table-wrap"><table><thead><tr><th>Variedad</th><th>Grado</th><th>Ramos</th><th>Tallos</th><th>Total vendido</th></tr></thead><tbody id="report-body"></tbody></table></div><div class="empty-state" id="report-empty"><strong>Seleccione un período</strong><span>Genere el informe para consultar las ventas.</span></div></article>
+        </section>
       </div>
     </main>
   </div>
@@ -181,6 +190,8 @@
       <div class="dialog-actions"><button class="button button--ghost" type="button" data-close-dialog="cancel-remission-dialog">Conservar remisión</button><button class="button button--danger" type="submit">Anular remisión</button></div>
     </form>
   </dialog>
+
+  <dialog id="reports-access-dialog"><form class="dialog-card" id="reports-access-form"><div class="dialog-head"><div><p class="eyebrow">ACCESO RESTRINGIDO</p><h2>Informes de ventas</h2><p class="muted">Ingrese la contraseña autorizada para consultar o exportar informes.</p></div><button class="icon-button" type="button" data-close-dialog="reports-access-dialog">×</button></div><label>Contraseña de informes<input id="reports-password" type="password" autocomplete="current-password" required autofocus></label><p class="form-error" id="reports-access-error" role="alert"></p><div class="dialog-actions"><button class="button button--primary" type="submit">Ingresar a informes</button></div></form></dialog>
 
   <dialog id="remission-dialog" class="document-dialog">
     <div class="document-actions"><button class="button button--ghost" id="close-document">Cerrar</button><button class="button button--ghost" id="edit-document-prices">Editar precios</button><button class="button button--ghost is-hidden" id="cancel-document-prices">Cancelar edición</button><button class="button button--accent is-hidden" id="save-document-prices">Guardar precios</button><button class="button button--primary" id="print-document">Imprimir / Guardar PDF</button></div>
