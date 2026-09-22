@@ -344,13 +344,26 @@ function renderDocument(data) {
   const company = state.config;
   const totalBunches = data.items.reduce((sum, item) => sum + Number(item.bunches || 0), 0);
   const totalStems = data.items.reduce((sum, item) => sum + Number(item.stems || 0), 0);
+  const displayItems = Object.values(data.items.reduce((groups, item) => {
+    const key = `${clientKey(item.variety)}|${item.gradeCm}`;
+    const group = groups[key] || { ...item, ids: [], originalPrices: [], bunches: 0, stems: 0, subtotal: 0 };
+    group.ids.push(item.id);
+    group.originalPrices.push(Number(item.unitPriceBunch));
+    group.bunches += Number(item.bunches || 0);
+    group.stems += Number(item.stems || 0);
+    group.subtotal += Number(item.subtotal || 0);
+    group.stemsPerBunch = group.bunches ? group.stems / group.bunches : 0;
+    group.unitPriceBunch = group.bunches ? group.subtotal / group.bunches : 0;
+    groups[key] = group;
+    return groups;
+  }, {}));
   const documentElement = $('#printable-document');
   documentElement.dataset.filename = data.remissionNumber;
   documentElement.innerHTML = `
     ${data.status === 'ANULADA' ? '<div class="doc-canceled-mark">ANULADA</div>' : ''}
     <header class="doc-head"><div class="doc-brand"><span class="brand-logo brand-logo--document"><img src="/logo-prestige.jpeg" alt="Prestige Roses"></span><div><h2>${escapeHtml(company.companyName)}</h2><p>${escapeHtml(company.companyNit ? `NIT: ${company.companyNit}` : 'Salida nacional de flor')}</p></div></div><div class="doc-number"><span>REMISIÓN</span><strong>${escapeHtml(data.remissionNumber)}</strong><p>${dateTime(data.createdAt)}</p></div></header>
     <section class="doc-client"><div class="doc-field"><span>Cliente</span><strong>${escapeHtml(data.clientName)}</strong></div><div class="doc-field"><span>NIT / Documento</span><strong>${escapeHtml(data.clientDocument || '—')}</strong></div><div class="doc-field"><span>Entregado por</span><strong>${escapeHtml(data.deliveredBy || '—')}</strong></div></section>
-    <table class="doc-table"><thead><tr><th>Variedad</th><th>Grado</th><th>Tallos/ramo</th><th>Ramos</th><th>Total tallos</th><th>Precio ramo</th><th>Subtotal</th></tr></thead><tbody>${data.items.map(item => `<tr><td><strong>${escapeHtml(item.variety)}</strong></td><td>${escapeHtml(item.gradeCm || '—')}</td><td>${number(item.stemsPerBunch)}</td><td>${number(item.bunches)}</td><td>${number(item.stems)}</td><td>${state.editingDocumentPrices ? `<input class="doc-price-input" type="number" min="1" step="1" value="${Number(item.unitPriceBunch)}" data-document-price="${item.id}" aria-label="Precio por ramo de ${escapeHtml(item.variety)}">` : money(item.unitPriceBunch)}</td><td>${money(item.subtotal)}</td></tr>`).join('')}</tbody><tfoot><tr class="doc-table-totals"><td colspan="3"><strong>TOTALES</strong></td><td><strong>${number(totalBunches)} ramos</strong></td><td><strong>${number(totalStems)} tallos</strong></td><td></td><td><strong>${money(data.total)}</strong></td></tr></tfoot></table>
+    <table class="doc-table"><thead><tr><th>Variedad</th><th>Grado</th><th>Tallos/ramo</th><th>Ramos</th><th>Total tallos</th><th>Precio ramo</th><th>Subtotal</th></tr></thead><tbody>${displayItems.map(item => `<tr><td><strong>${escapeHtml(item.variety)}</strong></td><td>${escapeHtml(item.gradeCm || '—')}</td><td>${number(item.stemsPerBunch)}</td><td>${number(item.bunches)}</td><td>${number(item.stems)}</td><td>${state.editingDocumentPrices ? `<input class="doc-price-input" type="number" min="1" step="1" value="${Number(item.unitPriceBunch)}" data-document-price="${item.ids.join(',')}" data-document-original-prices="${item.originalPrices.join(',')}" data-document-display-price="${Number(item.unitPriceBunch)}" aria-label="Precio por ramo de ${escapeHtml(item.variety)}">` : money(item.unitPriceBunch)}</td><td>${money(item.subtotal)}</td></tr>`).join('')}</tbody><tfoot><tr class="doc-table-totals"><td colspan="3"><strong>TOTALES</strong></td><td><strong>${number(totalBunches)} ramos</strong></td><td><strong>${number(totalStems)} tallos</strong></td><td></td><td><strong>${money(data.total)}</strong></td></tr></tfoot></table>
     <div class="doc-total"><span>TOTAL</span><span>${money(data.total)}</span></div>
     ${data.notes ? `<div class="doc-notes"><strong>Observaciones:</strong> ${escapeHtml(data.notes)}</div>` : ''}
     ${data.status === 'ANULADA' ? `<div class="doc-cancellation"><strong>Remisión anulada:</strong> ${escapeHtml(data.cancellationReason || 'Sin motivo registrado')} · ${data.canceledAt ? dateTime(data.canceledAt) : ''}</div>` : ''}
@@ -581,7 +594,13 @@ $('#cancel-document-prices').addEventListener('click', () => {
 });
 $('#save-document-prices').addEventListener('click', async event => {
   if (!state.activeRemission) return;
-  const items = $$('[data-document-price]').map(input => ({ id: Number(input.dataset.documentPrice), unitPriceBunch: Number(input.value) }));
+  const items = $$('[data-document-price]').flatMap(input => {
+    const ids = input.dataset.documentPrice.split(',').map(Number);
+    const originalPrices = input.dataset.documentOriginalPrices.split(',').map(Number);
+    const currentPrice = Number(input.value);
+    const unchanged = currentPrice === Number(input.dataset.documentDisplayPrice);
+    return ids.map((id, index) => ({ id, unitPriceBunch: unchanged ? originalPrices[index] : currentPrice }));
+  });
   if (items.some(item => !(item.unitPriceBunch > 0))) return toast('Ingrese un precio por ramo mayor que cero para cada variedad.');
   event.currentTarget.disabled = true;
   try {
