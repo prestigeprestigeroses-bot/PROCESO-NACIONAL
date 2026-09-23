@@ -161,7 +161,7 @@ function statusMeta(status) {
 }
 
 function renderLines() {
-  $('#remission-lines').innerHTML = state.lines.map(line => `<div class="line-item line-item--complete"><strong>${escapeHtml(line.variety)}</strong><span>${escapeHtml(line.gradeCm)} · ${inventoryDate(line.date)}</span><span>${bunchLabel(line.bunches)}</span><span>${number(line.stems)} tallos</span><b>${money(line.subtotal)}</b><button type="button" class="remove-line" data-remove-line="${line.key}" aria-label="Quitar ${escapeHtml(line.variety)}">×</button></div>`).join('');
+  $('#remission-lines').innerHTML = state.lines.map(line => `<div class="line-item line-item--complete"><strong>${escapeHtml(line.variety)}</strong><span>${line.type === 'export' ? `Exportación · ${escapeHtml(line.gradeCm)} cm` : `${escapeHtml(line.gradeCm)} · ${inventoryDate(line.date)}`}</span><span>${bunchLabel(line.bunches)}</span><span>${number(line.stems)} tallos</span><b>${money(line.subtotal)}</b><button type="button" class="remove-line" data-remove-line="${escapeHtml(line.key)}" aria-label="Quitar ${escapeHtml(line.variety)}">×</button></div>`).join('');
   const bunches = state.lines.reduce((sum, row) => sum + row.bunches, 0);
   const stems = state.lines.reduce((sum, row) => sum + row.stems, 0);
   const total = state.lines.reduce((sum, row) => sum + row.subtotal, 0);
@@ -196,9 +196,9 @@ function renderPrices() {
   });
   const cardColors = ['#176b57', '#265f99', '#7955a2', '#a05a28', '#9a3f58', '#28736e'];
   $('#price-list-body').innerHTML = [...groups.entries()].map(([key, group], index) => {
-    const gradeSummary = ['NACIONAL', 'BAJAS', 'NACIONAL GRANEL'].map(grade => {
+    const gradeSummary = ['NACIONAL', 'BAJAS', 'NACIONAL GRANEL', '40', '50', '60'].map(grade => {
       const count = group.rows.filter(row => row.gradeCm === grade).length;
-      return count ? `${grade === 'NACIONAL GRANEL' ? 'Granel' : grade[0] + grade.slice(1).toLowerCase()}: ${count}` : '';
+      return count ? `${['40', '50', '60'].includes(grade) ? `Exportación ${grade} cm` : grade === 'NACIONAL GRANEL' ? 'Granel' : grade[0] + grade.slice(1).toLowerCase()}: ${count}` : '';
     }).filter(Boolean).join(' · ');
     const expanded = state.expandedPriceClients.has(key);
     return `<article class="price-client-card${expanded ? ' is-expanded' : ''}" style="--client-color:${cardColors[index % cardColors.length]}"><header><div><span>CLIENTE</span><h4>${escapeHtml(group.clientName)}</h4><small>${group.rows.length} ${group.rows.length === 1 ? 'precio configurado' : 'precios configurados'} · ${escapeHtml(gradeSummary)}</small></div><div class="price-client-actions"><button class="small-button" type="button" data-toggle-price-client="${escapeHtml(key)}">${expanded ? 'Ocultar detalle' : 'Ver detalle'}</button><button class="small-button" type="button" data-edit-price-client="${escapeHtml(key)}">Editar lista</button><button class="small-button small-button--danger" type="button" data-delete-price-client="${escapeHtml(key)}">Eliminar precios</button></div></header><div class="price-client-items">${group.rows.map(row => `<div><strong>${escapeHtml(row.variety)}</strong><span class="grade-chip">${escapeHtml(row.gradeCm)}</span><b>${money(row.pricePerBunch)}</b></div>`).join('')}</div></article>`;
@@ -284,9 +284,9 @@ function renderReport() {
   const bunches = rows.reduce((sum, row) => sum + Number(row.bunches || 0), 0);
   const stems = rows.reduce((sum, row) => sum + Number(row.stems || 0), 0);
   $('#report-money').textContent = money(total); $('#report-bunches').textContent = number(bunches); $('#report-stems').textContent = number(stems);
-  $('#report-grades').innerHTML = ['NACIONAL', 'BAJAS', 'NACIONAL GRANEL'].map(grade => {
+  $('#report-grades').innerHTML = ['NACIONAL', 'BAJAS', 'NACIONAL GRANEL', '40', '50', '60'].map(grade => {
     const subset = rows.filter(row => row.gradeCm === grade);
-    return `<article class="report-grade"><span>${escapeHtml(grade)}</span><strong>${number(subset.reduce((sum, row) => sum + Number(row.stems || 0), 0))} tallos</strong><small>${number(subset.reduce((sum, row) => sum + Number(row.bunches || 0), 0))} ramos · ${money(subset.reduce((sum, row) => sum + Number(row.subtotal || 0), 0))}</small></article>`;
+    return `<article class="report-grade"><span>${['40', '50', '60'].includes(grade) ? `EXPORTACIÓN ${grade} CM` : escapeHtml(grade)}</span><strong>${number(subset.reduce((sum, row) => sum + Number(row.stems || 0), 0))} tallos</strong><small>${number(subset.reduce((sum, row) => sum + Number(row.bunches || 0), 0))} ramos · ${money(subset.reduce((sum, row) => sum + Number(row.subtotal || 0), 0))}</small></article>`;
   }).join('');
   const groups = reportGroups(rows);
   $('#report-body').innerHTML = groups.map(row => `<tr><td><strong>${escapeHtml(row.variety)}</strong></td><td><span class="grade-chip">${escapeHtml(row.gradeCm)}</span></td><td class="quantity">${number(row.bunches)}</td><td class="quantity">${number(row.stems)}</td><td class="money"><strong>${money(row.subtotal)}</strong></td></tr>`).join('');
@@ -323,9 +323,11 @@ function clearRemission() {
   state.lines = []; state.stepGrade = 'ALL';
   $('#step-grade-filter').value = 'ALL';
   $('#line-bunches').value = 1;
+  $('#export-bunches').value = 1; $('#export-stems').value = 25;
   renderVarietyOptions(); renderLines();
   $('#remission-error').textContent = '';
   $('#line-error').textContent = '';
+  $('#export-error').textContent = '';
 }
 
 function continueRemission(remission) {
@@ -375,7 +377,7 @@ function renderDocument(data) {
     ${data.status === 'ANULADA' ? '<div class="doc-canceled-mark">ANULADA</div>' : ''}
     <header class="doc-head"><div class="doc-brand"><span class="brand-logo brand-logo--document"><img src="/logo-prestige.jpeg" alt="Prestige Roses"></span><div><h2>${escapeHtml(company.companyName)}</h2><p>${escapeHtml(company.companyNit ? `NIT: ${company.companyNit}` : 'Salida nacional de flor')}</p></div></div><div class="doc-number"><span>REMISIÓN</span><strong>${data.status === 'ANULADA' ? 'ANULADA' : escapeHtml(data.remissionNumber || 'Pendiente')}</strong><p>${dateTime(data.createdAt)}</p></div></header>
     <section class="doc-client"><div class="doc-field"><span>Cliente</span><strong>${escapeHtml(data.clientName)}</strong></div><div class="doc-field"><span>NIT / Documento</span><strong>${escapeHtml(data.clientDocument || '—')}</strong></div><div class="doc-field"><span>Entregado por</span><strong>${escapeHtml(data.deliveredBy || '—')}</strong></div></section>
-    <table class="doc-table"><thead><tr><th>Variedad</th><th>Grado</th><th>Tallos/ramo</th><th>Ramos</th><th>Total tallos</th><th>Precio ramo</th><th>Subtotal</th></tr></thead><tbody>${displayItems.map(item => `<tr><td><strong>${escapeHtml(item.variety)}</strong></td><td>${escapeHtml(item.gradeCm || '—')}</td><td>${number(item.stemsPerBunch)}</td><td>${number(item.bunches)}</td><td>${number(item.stems)}</td><td>${state.editingDocumentPrices ? `<input class="doc-price-input" type="number" min="1" step="1" value="${Number(item.unitPriceBunch)}" data-document-price="${item.ids.join(',')}" data-document-original-prices="${item.originalPrices.join(',')}" data-document-display-price="${Number(item.unitPriceBunch)}" aria-label="Precio por ramo de ${escapeHtml(item.variety)}">` : money(item.unitPriceBunch)}</td><td>${money(item.subtotal)}</td></tr>`).join('')}</tbody><tfoot><tr class="doc-table-totals"><td colspan="3"><strong>TOTALES</strong></td><td><strong>${number(totalBunches)} ramos</strong></td><td><strong>${number(totalStems)} tallos</strong></td><td></td><td><strong>${money(data.total)}</strong></td></tr></tfoot></table>
+    <table class="doc-table"><thead><tr><th>Variedad</th><th>Grado</th><th>Tallos/ramo</th><th>Ramos</th><th>Total tallos</th><th>Precio ramo</th><th>Subtotal</th></tr></thead><tbody>${displayItems.map(item => `<tr><td><strong>${escapeHtml(item.variety)}</strong></td><td>${['40', '50', '60'].includes(item.gradeCm) ? `Exportación ${item.gradeCm} cm` : escapeHtml(item.gradeCm || '—')}</td><td>${number(item.stemsPerBunch)}</td><td>${number(item.bunches)}</td><td>${number(item.stems)}</td><td>${state.editingDocumentPrices ? `<input class="doc-price-input" type="number" min="1" step="1" value="${Number(item.unitPriceBunch)}" data-document-price="${item.ids.join(',')}" data-document-original-prices="${item.originalPrices.join(',')}" data-document-display-price="${Number(item.unitPriceBunch)}" aria-label="Precio por ramo de ${escapeHtml(item.variety)}">` : money(item.unitPriceBunch)}</td><td>${money(item.subtotal)}</td></tr>`).join('')}</tbody><tfoot><tr class="doc-table-totals"><td colspan="3"><strong>TOTALES</strong></td><td><strong>${number(totalBunches)} ramos</strong></td><td><strong>${number(totalStems)} tallos</strong></td><td></td><td><strong>${money(data.total)}</strong></td></tr></tfoot></table>
     <div class="doc-total"><span>TOTAL</span><span>${money(data.total)}</span></div>
     ${data.notes ? `<div class="doc-notes"><strong>Observaciones:</strong> ${escapeHtml(data.notes)}</div>` : ''}
     ${data.status === 'ANULADA' ? `<div class="doc-cancellation"><strong>Remisión anulada:</strong> ${escapeHtml(data.cancellationReason || 'Sin motivo registrado')} · ${data.canceledAt ? dateTime(data.canceledAt) : ''}</div>` : ''}
@@ -548,16 +550,34 @@ $('#add-line-button').addEventListener('click', () => {
   $('#line-variety').value = ''; $('#line-bunches').value = 1; renderVarietyOptions(); renderLines();
 });
 
+$('#export-variety').innerHTML = '<option value="">Seleccione una variedad</option>' + varieties.map(variety => `<option value="${escapeHtml(variety)}">${escapeHtml(variety)}</option>`).join('');
+$('#add-export-button').addEventListener('click', () => {
+  const variety = $('#export-variety').value;
+  const gradeCm = $('#export-grade').value;
+  const bunches = Number($('#export-bunches').value);
+  const stemsPerBunch = Number($('#export-stems').value);
+  const error = $('#export-error'); error.textContent = '';
+  if (!variety) return error.textContent = 'Seleccione una variedad de exportación.';
+  if (!Number.isSafeInteger(bunches) || bunches < 1 || !Number.isSafeInteger(stemsPerBunch) || stemsPerBunch < 1) return error.textContent = 'Ingrese ramos y tallos por ramo válidos.';
+  const price = selectedPrice($('#remission-client-name').value, variety, gradeCm);
+  if (!price) return error.textContent = `No hay precio para ${variety} · exportación ${gradeCm} cm. Regístrelo en Lista de precios.`;
+  const key = `export:${clientKey(variety)}:${gradeCm}:${stemsPerBunch}`;
+  const existing = state.lines.find(row => row.key === key);
+  if (existing) { existing.bunches += bunches; existing.stems = existing.bunches * stemsPerBunch; existing.subtotal = existing.bunches * existing.unitPriceBunch; }
+  else state.lines.push({ type: 'export', key, variety, gradeCm, stemsPerBunch, bunches, stems: bunches * stemsPerBunch, unitPriceBunch: Number(price.pricePerBunch), subtotal: bunches * Number(price.pricePerBunch) });
+  $('#export-variety').value = ''; $('#export-bunches').value = 1; renderLines();
+});
+
 $('#remission-form').addEventListener('submit', async event => {
   event.preventDefault();
   const button = event.submitter;
   $('#remission-error').textContent = '';
   if (!state.lines.length) return $('#remission-error').textContent = 'Agregue al menos una variedad.';
-  const payload = { ...Object.fromEntries(new FormData(event.currentTarget)), items: state.lines.map(({ key, bunches }) => ({ key, bunches })) };
+  const payload = { ...Object.fromEntries(new FormData(event.currentTarget)), items: state.lines.map(line => line.type === 'export' ? { type: 'export', variety: line.variety, gradeCm: line.gradeCm, stemsPerBunch: line.stemsPerBunch, bunches: line.bunches } : { key: line.key, bunches: line.bunches }) };
   button.disabled = true;
   try {
     const remission = await api('/api/remissions', { method: 'POST', body: JSON.stringify(payload) });
-    renderDocument(remission); clearRemission(); await refreshAll(); $('#remission-dialog').showModal(); toast('Remisión finalizada e inventario actualizado.');
+    renderDocument(remission); clearRemission(); await refreshAll(); $('#remission-dialog').showModal(); toast('Remisión finalizada. Inventario nacional actualizado.');
   } catch (error) { $('#remission-error').textContent = error.message; }
   finally { button.disabled = false; }
 });

@@ -120,6 +120,17 @@
                   </div>
                   <div class="stock-preview" id="line-stock-preview">Seleccione una variedad para ver fecha, grado, tallos y disponibilidad.</div>
                   <p class="inline-error" id="line-error"></p>
+                  <div class="export-entry">
+                    <div><strong>Ramos de exportación</strong><p>Agregar manualmente; no se descuentan del inventario nacional.</p></div>
+                    <div class="export-entry-fields">
+                      <label>Variedad<select id="export-variety"><option value="">Seleccione una variedad</option></select></label>
+                      <label>Grado<select id="export-grade"><option value="40">40 cm</option><option value="50">50 cm</option><option value="60">60 cm</option></select></label>
+                      <label>Ramos<input id="export-bunches" type="number" min="1" step="1" value="1"></label>
+                      <label>Tallos por ramo<input id="export-stems" type="number" min="1" step="1" value="25"></label>
+                      <button class="button button--dark" type="button" id="add-export-button">Agregar exportación</button>
+                    </div>
+                    <p class="inline-error" id="export-error"></p>
+                  </div>
                   <div class="remission-lines" id="remission-lines"></div>
                 </article>
                 <article class="panel form-panel notes-panel"><label>Observaciones<textarea name="notes" rows="3" placeholder="Indicaciones especiales para el despacho"></textarea></label></article>
@@ -129,7 +140,7 @@
                 <div class="summary-row"><span>Ramos</span><strong id="summary-bunches">0</strong></div>
                 <div class="summary-row"><span>Tallos</span><strong id="summary-stems">0</strong></div>
                 <div class="summary-total"><span>Total de la remisión</span><strong id="summary-total">$ 0</strong></div>
-                <p class="summary-note">Al finalizar se genera el documento y la flor se descuenta inmediatamente del inventario.</p>
+                <p class="summary-note">Al finalizar se descuenta la flor nacional. Los ramos de exportación se registran en la remisión sin afectar ese inventario.</p>
                 <p class="form-error" id="remission-error" role="alert"></p>
                 <button class="button button--accent button--wide" type="submit">Finalizar remisión</button>
                 <button class="button button--ghost button--wide" type="button" id="clear-remission">Limpiar formulario</button>
@@ -146,7 +157,7 @@
               <form id="price-form" class="price-form-grid">
                 <label class="span-2">Cliente (opcional)<input id="price-client-name" name="clientName" list="known-clients" placeholder="Ej. Cliente mayorista"></label>
                 <label>Variedad<select id="price-variety" name="variety"></select></label>
-                <label>Grado<select name="gradeCm"><option value="NACIONAL">Nacional</option><option value="BAJAS">Bajas</option><option value="NACIONAL GRANEL">Nacional granel</option></select></label>
+                <label>Grado<select name="gradeCm"><option value="NACIONAL">Nacional</option><option value="BAJAS">Bajas</option><option value="NACIONAL GRANEL">Nacional granel</option><option value="40">Exportación 40 cm</option><option value="50">Exportación 50 cm</option><option value="60">Exportación 60 cm</option></select></label>
                 <label>Precio por ramo (COP)<input name="pricePerBunch" type="number" min="1" step="1" placeholder="Ej. 6000"></label>
                 <button class="button button--dark" type="button" id="add-price-draft">Agregar variedad</button>
                 <div class="price-bulk span-2"><div><strong>Precio para las variedades restantes</strong><span>Usa el mismo precio y grado seleccionados para las variedades que aún no se han agregado o configurado para este cliente.</span></div><button class="small-button" type="button" id="add-remaining-price-drafts">Aplicar a las restantes</button></div>

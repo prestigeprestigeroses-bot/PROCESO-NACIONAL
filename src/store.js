@@ -6,6 +6,8 @@ const usePostgres = Boolean(process.env.DATABASE_URL);
 const dataDirectory = path.join(process.cwd(), '.data');
 const dataFile = path.join(dataDirectory, 'flor-data.json');
 const allowedGrades = ['BAJAS', 'NACIONAL', 'NACIONAL GRANEL'];
+const exportGrades = ['40', '50', '60'];
+const priceGrades = [...allowedGrades, ...exportGrades];
 const businessTimeZone = process.env.BUSINESS_TIME_ZONE || 'America/Cancun';
 
 let pool;
@@ -379,12 +381,20 @@ function cleanRemissionInput(input) {
   };
   if (!details.clientName) throw new Error('El nombre del cliente es obligatorio.');
   if (!details.deliveredBy) throw new Error('El nombre de quien entrega es obligatorio.');
-  const items = (Array.isArray(input.items) ? input.items : [])
-    .map(row => ({
-      key: String(row.key || ''),
-      bunches: Math.max(0, Number.parseInt(row.bunches, 10) || 0)
-    }))
-    .filter(row => row.key && row.bunches > 0);
+  const items = (Array.isArray(input.items) ? input.items : []).map(row => {
+    const bunches = Number(row.bunches);
+    if (!Number.isSafeInteger(bunches) || bunches <= 0) throw new Error('Ingrese una cantidad válida de ramos.');
+    if (row.type === 'export') {
+      const variety = String(row.variety || '').trim();
+      const gradeCm = String(row.gradeCm || '').trim();
+      const stemsPerBunch = Number(row.stemsPerBunch);
+      if (!variety || !exportGrades.includes(gradeCm) || !Number.isSafeInteger(stemsPerBunch) || stemsPerBunch <= 0) throw new Error('Revise variedad, grado y tallos por ramo de exportación.');
+      return { type: 'export', key: `export:${normalizedText(variety)}:${gradeCm}:${stemsPerBunch}`, variety, gradeCm, stemsPerBunch, bunches };
+    }
+    const key = String(row.key || '');
+    decodeInventoryKey(key);
+    return { key, bunches };
+  });
   if (!items.length) throw new Error('Agregue al menos una variedad a la remisión.');
   const keys = new Set();
   for (const item of items) {
@@ -400,7 +410,7 @@ function cleanPriceInput(input) {
   const gradeCm = normalizedText(input.gradeCm);
   const pricePerBunch = Number(input.pricePerBunch);
   if (!variety) throw new Error('Seleccione una variedad.');
-  if (!allowedGrades.includes(gradeCm)) throw new Error('Seleccione un grado válido.');
+  if (!priceGrades.includes(gradeCm)) throw new Error('Seleccione un grado válido.');
   if (!(pricePerBunch > 0)) throw new Error('Ingrese un precio por ramo mayor que cero.');
   return { clientName, clientKey: clientName ? normalizedText(clientName) : generalPriceKey, variety, gradeCm, pricePerBunch };
 }
@@ -528,6 +538,7 @@ async function createRemission(input) {
   const { details, items } = cleanRemissionInput(input);
   if (!usePostgres) {
     const selected = items.map(requested => {
+      if (requested.type === 'export') return { stock: null, requested, decoded: { variety: requested.variety, gradeCm: requested.gradeCm, stemsPerBunch: requested.stemsPerBunch, sourceDate: null } };
       const decoded = decodeInventoryKey(requested.key);
       const stock = memory.inventory.find(row => inventoryKey({ ...row, date: dateOnly(row.date ?? row.updatedAt), gradeCm: row.gradeCm || 'NACIONAL' }) === requested.key);
       if (!stock || requested.bunches > stock.bunches) throw new Error(`Stock insuficiente de ${decoded.variety}.`);
@@ -552,7 +563,7 @@ async function createRemission(input) {
     const year = new Date(now).getFullYear();
     const next = memory.remissions.filter(row => row.status === 'FINALIZADA' && new Date(row.createdAt).getFullYear() === year).length + 1;
     const remission = { id, remissionNumber: nextNumber(next), ...details, requestedBunches, requestedStems, total, status: 'FINALIZADA', finalizedAt: now, createdAt: now, items: detailRows };
-    selected.forEach(({ stock, requested, decoded }) => { stock.bunches -= requested.bunches; stock.stems -= requested.bunches * decoded.stemsPerBunch; });
+    selected.forEach(({ stock, requested, decoded }) => { if (stock) { stock.bunches -= requested.bunches; stock.stems -= requested.bunches * decoded.stemsPerBunch; } });
     memory.remissions.unshift(remission);
     persistMemory();
     return remission;
@@ -563,13 +574,15 @@ async function createRemission(input) {
     await client.query('LOCK TABLE remissions IN EXCLUSIVE MODE');
     const detailRows = [];
     for (const requested of items) {
-      const selected = decodeInventoryKey(requested.key);
-      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [requested.key]);
-      const source = await client.query(`SELECT COUNT(*)::int AS source_bunches FROM public.scans WHERE ts::date=$1::date AND TRIM(variedad_nombre)=$2 AND UPPER(TRIM(grado_cm))=$3 AND tallos=$4`, [selected.sourceDate, selected.variety, selected.gradeCm, selected.stemsPerBunch]);
-      const used = await client.query(`SELECT COALESCE(SUM(ri.bunches),0)::int AS used_bunches FROM remission_items ri JOIN remissions r ON r.id=ri.remission_id WHERE ri.source_date=$1::date AND ri.variety=$2 AND ri.grade_cm=$3 AND ri.stems_per_bunch=$4 AND r.status <> 'ANULADA'`, [selected.sourceDate, selected.variety, selected.gradeCm, selected.stemsPerBunch]);
-      const transferred = selected.gradeCm === 'BAJAS' ? await client.query(`SELECT COALESCE(SUM(ti.bunches),0)::int AS bunches FROM export_transfer_items ti JOIN export_transfers t ON t.id=ti.transfer_id WHERE ti.source_date=$1::date AND ti.variety=$2 AND ti.stems_per_bunch=$3 AND t.canceled_at IS NULL`, [selected.sourceDate, selected.variety, selected.stemsPerBunch]) : null;
-      const available = Number(source.rows[0].source_bunches) - Number(used.rows[0].used_bunches) - Number(transferred?.rows[0].bunches || 0);
-      if (requested.bunches > available) throw new Error(`Stock insuficiente de ${selected.variety}. Quedan ${Math.max(available, 0)} ramos.`);
+      const selected = requested.type === 'export' ? { variety: requested.variety, gradeCm: requested.gradeCm, stemsPerBunch: requested.stemsPerBunch, sourceDate: null } : decodeInventoryKey(requested.key);
+      if (requested.type !== 'export') {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [requested.key]);
+        const source = await client.query(`SELECT COUNT(*)::int AS source_bunches FROM public.scans WHERE ts::date=$1::date AND TRIM(variedad_nombre)=$2 AND UPPER(TRIM(grado_cm))=$3 AND tallos=$4`, [selected.sourceDate, selected.variety, selected.gradeCm, selected.stemsPerBunch]);
+        const used = await client.query(`SELECT COALESCE(SUM(ri.bunches),0)::int AS used_bunches FROM remission_items ri JOIN remissions r ON r.id=ri.remission_id WHERE ri.source_date=$1::date AND ri.variety=$2 AND ri.grade_cm=$3 AND ri.stems_per_bunch=$4 AND r.status <> 'ANULADA'`, [selected.sourceDate, selected.variety, selected.gradeCm, selected.stemsPerBunch]);
+        const transferred = selected.gradeCm === 'BAJAS' ? await client.query(`SELECT COALESCE(SUM(ti.bunches),0)::int AS bunches FROM export_transfer_items ti JOIN export_transfers t ON t.id=ti.transfer_id WHERE ti.source_date=$1::date AND ti.variety=$2 AND ti.stems_per_bunch=$3 AND t.canceled_at IS NULL`, [selected.sourceDate, selected.variety, selected.stemsPerBunch]) : null;
+        const available = Number(source.rows[0].source_bunches) - Number(used.rows[0].used_bunches) - Number(transferred?.rows[0].bunches || 0);
+        if (requested.bunches > available) throw new Error(`Stock insuficiente de ${selected.variety}. Quedan ${Math.max(available, 0)} ramos.`);
+      }
       const priceResult = await client.query(
         `SELECT price_per_bunch FROM price_lists
          WHERE UPPER(TRIM(variety))=UPPER(TRIM($1)) AND grade_cm=$2 AND client_key = ANY($3::text[])
@@ -709,6 +722,7 @@ async function cancelRemission(id, input) {
     if (remission.status === 'ANULADA') throw new Error('Esta remisión ya está anulada.');
     if (Array.isArray(remission.items)) {
       for (const item of remission.items) {
+        if (!item.sourceDate) continue;
         const stock = memory.inventory.find(row => inventoryKey({ ...row, date: dateOnly(row.date ?? row.updatedAt), gradeCm: row.gradeCm || 'NACIONAL' }) === inventoryKey(item));
         if (stock) { stock.bunches += item.bunches; stock.stems += item.stems; }
       }
