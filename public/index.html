@@ -120,8 +120,9 @@
                   </div>
                   <div class="stock-preview" id="line-stock-preview">Seleccione una variedad para ver fecha, grado, tallos y disponibilidad.</div>
                   <p class="inline-error" id="line-error"></p>
-                  <div class="export-entry">
-                    <div><strong>Ramos de exportación</strong><p>Agregar manualmente; no se descuentan del inventario nacional.</p></div>
+                  <details class="export-entry" id="export-entry">
+                    <summary><strong>Ramos de exportación</strong><span class="entry-toggle-label">Mostrar campos</span></summary>
+                    <p class="export-entry-help">Agregar manualmente; no se descuentan del inventario nacional.</p>
                     <div class="export-entry-fields">
                       <label>Variedad<select id="export-variety"><option value="">Seleccione una variedad</option></select></label>
                       <label>Grado<select id="export-grade"><option value="40">40 cm</option><option value="50">50 cm</option><option value="60">60 cm</option></select></label>
@@ -130,7 +131,16 @@
                       <button class="button button--dark" type="button" id="add-export-button">Agregar exportación</button>
                     </div>
                     <p class="inline-error" id="export-error"></p>
-                  </div>
+                  </details>
+                  <details class="export-entry" id="eucalyptus-entry">
+                    <summary><strong>Eucalipto · hoja</strong><span class="entry-toggle-label">Mostrar campos</span></summary>
+                    <p class="export-entry-help">Se cobra por tallo y se registra sin descontar el inventario de rosas.</p>
+                    <div class="export-entry-fields eucalyptus-entry-fields">
+                      <label>Tallos<input id="eucalyptus-stems" type="number" min="1" step="1" value="25"></label>
+                      <button class="button button--dark" type="button" id="add-eucalyptus-button">Agregar Eucalipto</button>
+                    </div>
+                    <p class="inline-error" id="eucalyptus-error"></p>
+                  </details>
                   <div class="remission-lines" id="remission-lines"></div>
                 </article>
                 <article class="panel form-panel notes-panel"><label>Observaciones<textarea name="notes" rows="3" placeholder="Indicaciones especiales para el despacho"></textarea></label></article>
@@ -157,8 +167,8 @@
               <form id="price-form" class="price-form-grid">
                 <label class="span-2">Cliente (opcional)<input id="price-client-name" name="clientName" list="known-clients" placeholder="Ej. Cliente mayorista"></label>
                 <label>Variedad<select id="price-variety" name="variety"></select></label>
-                <label>Grado<select name="gradeCm"><option value="NACIONAL">Nacional</option><option value="BAJAS">Bajas</option><option value="NACIONAL GRANEL">Nacional granel</option><option value="40">Exportación 40 cm</option><option value="50">Exportación 50 cm</option><option value="60">Exportación 60 cm</option></select></label>
-                <label>Precio por ramo (COP)<input name="pricePerBunch" type="number" min="1" step="1" placeholder="Ej. 6000"></label>
+                <label>Grado<select name="gradeCm"><option value="NACIONAL">Nacional</option><option value="BAJAS">Bajas</option><option value="NACIONAL GRANEL">Nacional granel</option><option value="40">Exportación 40 cm</option><option value="50">Exportación 50 cm</option><option value="60">Exportación 60 cm</option><option value="HOJA">Hoja · Eucalipto</option></select></label>
+                <label id="price-unit-label">Precio por ramo (COP)<input name="pricePerBunch" type="number" min="1" step="1" placeholder="Ej. 6000"></label>
                 <button class="button button--dark" type="button" id="add-price-draft">Agregar variedad</button>
                 <div class="price-bulk span-2"><div><strong>Precio para las variedades restantes</strong><span>Usa el mismo precio y grado seleccionados para las variedades que aún no se han agregado o configurado para este cliente.</span></div><button class="small-button" type="button" id="add-remaining-price-drafts">Aplicar a las restantes</button></div>
                 <div class="price-draft span-2" id="price-draft-lines"></div>

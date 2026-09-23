@@ -125,7 +125,7 @@ app.get('/api/reports/sales.xlsx', requireReportsAccess, async (request, respons
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([{ 'Desde': request.query.from, 'Hasta': request.query.to, 'Total vendido COP': total, 'Ramos vendidos': rows.reduce((sum, row) => sum + row.bunches, 0), 'Tallos vendidos': rows.reduce((sum, row) => sum + row.stems, 0) }]), 'Resumen');
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([...byVariety.values()]), 'Por variedad');
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([...byGrade.values()]), 'Por grado');
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows.map(row => ({ Fecha: new Date(row.createdAt).toLocaleDateString('es-CO'), Remisión: row.remissionNumber, Cliente: row.clientName, Variedad: row.variety, Grado: row.gradeCm, Ramos: row.bunches, Tallos: row.stems, 'Precio ramo COP': row.unitPriceBunch, 'Total COP': row.subtotal }))), 'Detalle remisiones');
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows.map(row => ({ Fecha: new Date(row.createdAt).toLocaleDateString('es-CO'), Remisión: row.remissionNumber, Cliente: row.clientName, Variedad: row.variety, Grado: row.gradeCm, Ramos: row.bunches, Tallos: row.stems, 'Unidad de precio': row.gradeCm === 'HOJA' ? 'Tallo' : 'Ramo', 'Precio unitario COP': row.gradeCm === 'HOJA' ? row.unitPriceStem : row.unitPriceBunch, 'Total COP': row.subtotal }))), 'Detalle remisiones');
     const output = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
     response.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     response.setHeader('Content-Disposition', `attachment; filename="informe-ventas-${request.query.from}-a-${request.query.to}.xlsx"`);
@@ -151,7 +151,7 @@ app.use((_request, response) => response.sendFile(path.join(__dirname, 'public',
 
 app.use((error, _request, response, _next) => {
   console.error(error);
-  const known = /obligatori|insuficiente|suficientes|negativ|no encontr|repetida|no es válida|no válido|cantidad válida|seleccione una variedad|ingrese el responsable|ingrese el motivo|precio por ramo|precio configurado|quedan|pendiente|exactamente|superar|asignadas|bloqueada|desbloquear|anulada|anulación/i.test(error.message);
+  const known = /obligatori|insuficiente|suficientes|negativ|no encontr|repetida|no es válida|no válido|cantidad válida|seleccione una variedad|ingrese el responsable|ingrese el motivo|precio por ramo|precio por tallo|precio mayor que cero|precio configurado|quedan|pendiente|exactamente|superar|asignadas|bloqueada|desbloquear|anulada|anulación/i.test(error.message);
   response.status(known ? 400 : 500).json({ error: known ? error.message : 'No fue posible completar la operación.' });
 });
 

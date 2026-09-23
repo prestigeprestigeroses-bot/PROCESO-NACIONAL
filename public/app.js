@@ -161,7 +161,7 @@ function statusMeta(status) {
 }
 
 function renderLines() {
-  $('#remission-lines').innerHTML = state.lines.map(line => `<div class="line-item line-item--complete"><strong>${escapeHtml(line.variety)}</strong><span>${line.type === 'export' ? `Exportación · ${escapeHtml(line.gradeCm)} cm` : `${escapeHtml(line.gradeCm)} · ${inventoryDate(line.date)}`}</span><span>${bunchLabel(line.bunches)}</span><span>${number(line.stems)} tallos</span><b>${money(line.subtotal)}</b><button type="button" class="remove-line" data-remove-line="${escapeHtml(line.key)}" aria-label="Quitar ${escapeHtml(line.variety)}">×</button></div>`).join('');
+  $('#remission-lines').innerHTML = state.lines.map(line => `<div class="line-item line-item--complete"><strong>${escapeHtml(line.variety)}</strong><span>${line.type === 'eucalyptus' ? 'Hoja · precio por tallo' : line.type === 'export' ? `Exportación · ${escapeHtml(line.gradeCm)} cm` : `${escapeHtml(line.gradeCm)} · ${inventoryDate(line.date)}`}</span><span>${line.type === 'eucalyptus' ? '—' : bunchLabel(line.bunches)}</span><span>${number(line.stems)} tallos</span><b>${money(line.subtotal)}</b><button type="button" class="remove-line" data-remove-line="${escapeHtml(line.key)}" aria-label="Quitar ${escapeHtml(line.variety)}">×</button></div>`).join('');
   const bunches = state.lines.reduce((sum, row) => sum + row.bunches, 0);
   const stems = state.lines.reduce((sum, row) => sum + row.stems, 0);
   const total = state.lines.reduce((sum, row) => sum + row.subtotal, 0);
@@ -184,7 +184,7 @@ function selectedPrice(clientName, variety, gradeCm) {
 
 function renderPrices() {
   const prices = Array.isArray(state.prices) ? state.prices : [];
-  $('#price-variety').innerHTML = '<option value="">Seleccione una variedad</option>' + varieties.map(variety => `<option value="${escapeHtml(variety)}">${escapeHtml(variety)}</option>`).join('');
+  $('#price-variety').innerHTML = '<option value="">Seleccione una variedad</option>' + [...varieties, 'EUCALIPTO'].map(variety => `<option value="${escapeHtml(variety)}">${escapeHtml(variety)}</option>`).join('');
   const clients = [...new Set(prices.map(row => row.clientName).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   $('#known-clients').innerHTML = clients.map(client => `<option value="${escapeHtml(client)}"></option>`).join('');
   $('#price-count').textContent = `${prices.length} ${prices.length === 1 ? 'PRECIO' : 'PRECIOS'}`;
@@ -196,12 +196,12 @@ function renderPrices() {
   });
   const cardColors = ['#176b57', '#265f99', '#7955a2', '#a05a28', '#9a3f58', '#28736e'];
   $('#price-list-body').innerHTML = [...groups.entries()].map(([key, group], index) => {
-    const gradeSummary = ['NACIONAL', 'BAJAS', 'NACIONAL GRANEL', '40', '50', '60'].map(grade => {
+    const gradeSummary = ['NACIONAL', 'BAJAS', 'NACIONAL GRANEL', '40', '50', '60', 'HOJA'].map(grade => {
       const count = group.rows.filter(row => row.gradeCm === grade).length;
-      return count ? `${['40', '50', '60'].includes(grade) ? `Exportación ${grade} cm` : grade === 'NACIONAL GRANEL' ? 'Granel' : grade[0] + grade.slice(1).toLowerCase()}: ${count}` : '';
+      return count ? `${grade === 'HOJA' ? 'Hoja' : ['40', '50', '60'].includes(grade) ? `Exportación ${grade} cm` : grade === 'NACIONAL GRANEL' ? 'Granel' : grade[0] + grade.slice(1).toLowerCase()}: ${count}` : '';
     }).filter(Boolean).join(' · ');
     const expanded = state.expandedPriceClients.has(key);
-    return `<article class="price-client-card${expanded ? ' is-expanded' : ''}" style="--client-color:${cardColors[index % cardColors.length]}"><header><div><span>CLIENTE</span><h4>${escapeHtml(group.clientName)}</h4><small>${group.rows.length} ${group.rows.length === 1 ? 'precio configurado' : 'precios configurados'} · ${escapeHtml(gradeSummary)}</small></div><div class="price-client-actions"><button class="small-button" type="button" data-toggle-price-client="${escapeHtml(key)}">${expanded ? 'Ocultar detalle' : 'Ver detalle'}</button><button class="small-button" type="button" data-edit-price-client="${escapeHtml(key)}">Editar lista</button><button class="small-button small-button--danger" type="button" data-delete-price-client="${escapeHtml(key)}">Eliminar precios</button></div></header><div class="price-client-items">${group.rows.map(row => `<div><strong>${escapeHtml(row.variety)}</strong><span class="grade-chip">${escapeHtml(row.gradeCm)}</span><b>${money(row.pricePerBunch)}</b></div>`).join('')}</div></article>`;
+    return `<article class="price-client-card${expanded ? ' is-expanded' : ''}" style="--client-color:${cardColors[index % cardColors.length]}"><header><div><span>CLIENTE</span><h4>${escapeHtml(group.clientName)}</h4><small>${group.rows.length} ${group.rows.length === 1 ? 'precio configurado' : 'precios configurados'} · ${escapeHtml(gradeSummary)}</small></div><div class="price-client-actions"><button class="small-button" type="button" data-toggle-price-client="${escapeHtml(key)}">${expanded ? 'Ocultar detalle' : 'Ver detalle'}</button><button class="small-button" type="button" data-edit-price-client="${escapeHtml(key)}">Editar lista</button><button class="small-button small-button--danger" type="button" data-delete-price-client="${escapeHtml(key)}">Eliminar precios</button></div></header><div class="price-client-items">${group.rows.map(row => `<div><strong>${escapeHtml(row.variety)}</strong><span class="grade-chip">${escapeHtml(row.gradeCm)}</span><b>${money(row.pricePerBunch)}${row.gradeCm === 'HOJA' ? ' / tallo' : ' / ramo'}</b></div>`).join('')}</div></article>`;
   }).join('');
   $('#price-list-empty').classList.toggle('is-hidden', prices.length > 0);
   renderPriceDrafts();
@@ -210,7 +210,7 @@ function renderPrices() {
 function renderPriceDrafts() {
   const element = $('#price-draft-lines');
   if (!element) return;
-  element.innerHTML = state.priceDrafts.map((row, index) => `<div class="price-draft-row"><strong>${escapeHtml(row.variety)}</strong><span>${escapeHtml(row.gradeCm)}</span><b>${money(row.pricePerBunch)}</b><button type="button" class="remove-line" data-remove-price-draft="${index}" aria-label="Quitar ${escapeHtml(row.variety)}">×</button></div>`).join('') || '<span class="price-draft-empty">Agregue varias variedades y guárdelas juntas para este cliente.</span>';
+  element.innerHTML = state.priceDrafts.map((row, index) => `<div class="price-draft-row"><strong>${escapeHtml(row.variety)}</strong><span>${escapeHtml(row.gradeCm)}</span><b>${money(row.pricePerBunch)}${row.gradeCm === 'HOJA' ? ' / tallo' : ' / ramo'}</b><button type="button" class="remove-line" data-remove-price-draft="${index}" aria-label="Quitar ${escapeHtml(row.variety)}">×</button></div>`).join('') || '<span class="price-draft-empty">Agregue varias variedades y guárdelas juntas para este cliente.</span>';
 }
 
 function addPriceDraft() {
@@ -221,7 +221,8 @@ function addPriceDraft() {
   const error = $('#price-error');
   error.textContent = '';
   if (!variety) return error.textContent = 'Seleccione una variedad.';
-  if (!pricePerBunch) return error.textContent = 'Ingrese un precio por ramo en COP.';
+  if (variety === 'EUCALIPTO' ? gradeCm !== 'HOJA' : gradeCm === 'HOJA') return error.textContent = 'Eucalipto debe tener grado Hoja; las rosas usan los demás grados.';
+  if (!pricePerBunch) return error.textContent = `Ingrese un precio por ${gradeCm === 'HOJA' ? 'tallo' : 'ramo'} en COP.`;
   const existing = state.priceDrafts.find(row => row.variety === variety && row.gradeCm === gradeCm);
   if (existing) existing.pricePerBunch = pricePerBunch;
   else state.priceDrafts.push({ variety, gradeCm, pricePerBunch });
@@ -237,6 +238,7 @@ function addRemainingPriceDrafts() {
   const error = $('#price-error');
   error.textContent = '';
   if (!pricePerBunch) return error.textContent = 'Ingrese el precio por ramo que aplicará a las variedades restantes.';
+  if (gradeCm === 'HOJA') return error.textContent = 'El precio de Eucalipto se agrega directamente, por tallo.';
   const currentClient = clientKey(form.elements.clientName.value) || '__GENERAL__';
   const alreadyAdded = new Set([
     ...state.priceDrafts.filter(row => row.gradeCm === gradeCm).map(row => clientKey(row.variety)),
@@ -284,9 +286,9 @@ function renderReport() {
   const bunches = rows.reduce((sum, row) => sum + Number(row.bunches || 0), 0);
   const stems = rows.reduce((sum, row) => sum + Number(row.stems || 0), 0);
   $('#report-money').textContent = money(total); $('#report-bunches').textContent = number(bunches); $('#report-stems').textContent = number(stems);
-  $('#report-grades').innerHTML = ['NACIONAL', 'BAJAS', 'NACIONAL GRANEL', '40', '50', '60'].map(grade => {
+  $('#report-grades').innerHTML = ['NACIONAL', 'BAJAS', 'NACIONAL GRANEL', '40', '50', '60', 'HOJA'].map(grade => {
     const subset = rows.filter(row => row.gradeCm === grade);
-    return `<article class="report-grade"><span>${['40', '50', '60'].includes(grade) ? `EXPORTACIÓN ${grade} CM` : escapeHtml(grade)}</span><strong>${number(subset.reduce((sum, row) => sum + Number(row.stems || 0), 0))} tallos</strong><small>${number(subset.reduce((sum, row) => sum + Number(row.bunches || 0), 0))} ramos · ${money(subset.reduce((sum, row) => sum + Number(row.subtotal || 0), 0))}</small></article>`;
+    return `<article class="report-grade"><span>${grade === 'HOJA' ? 'EUCALIPTO · HOJA' : ['40', '50', '60'].includes(grade) ? `EXPORTACIÓN ${grade} CM` : escapeHtml(grade)}</span><strong>${number(subset.reduce((sum, row) => sum + Number(row.stems || 0), 0))} tallos</strong><small>${grade === 'HOJA' ? 'Precio por tallo' : `${number(subset.reduce((sum, row) => sum + Number(row.bunches || 0), 0))} ramos`} · ${money(subset.reduce((sum, row) => sum + Number(row.subtotal || 0), 0))}</small></article>`;
   }).join('');
   const groups = reportGroups(rows);
   $('#report-body').innerHTML = groups.map(row => `<tr><td><strong>${escapeHtml(row.variety)}</strong></td><td><span class="grade-chip">${escapeHtml(row.gradeCm)}</span></td><td class="quantity">${number(row.bunches)}</td><td class="quantity">${number(row.stems)}</td><td class="money"><strong>${money(row.subtotal)}</strong></td></tr>`).join('');
@@ -320,14 +322,17 @@ function toast(message) {
 
 function clearRemission() {
   $('#remission-form').reset();
+  $('#export-entry').open = false; $('#eucalyptus-entry').open = false;
   state.lines = []; state.stepGrade = 'ALL';
   $('#step-grade-filter').value = 'ALL';
   $('#line-bunches').value = 1;
   $('#export-bunches').value = 1; $('#export-stems').value = 25;
+  $('#eucalyptus-stems').value = 25;
   renderVarietyOptions(); renderLines();
   $('#remission-error').textContent = '';
   $('#line-error').textContent = '';
   $('#export-error').textContent = '';
+  $('#eucalyptus-error').textContent = '';
 }
 
 function continueRemission(remission) {
@@ -362,12 +367,13 @@ function renderDocument(data) {
     const key = `${clientKey(item.variety)}|${item.gradeCm}`;
     const group = groups[key] || { ...item, ids: [], originalPrices: [], bunches: 0, stems: 0, subtotal: 0 };
     group.ids.push(item.id);
-    group.originalPrices.push(Number(item.unitPriceBunch));
+    group.originalPrices.push(Number(item.gradeCm === 'HOJA' ? item.unitPriceStem : item.unitPriceBunch));
     group.bunches += Number(item.bunches || 0);
     group.stems += Number(item.stems || 0);
     group.subtotal += Number(item.subtotal || 0);
     group.stemsPerBunch = group.bunches ? group.stems / group.bunches : 0;
-    group.unitPriceBunch = group.bunches ? group.subtotal / group.bunches : 0;
+    group.unitPriceBunch = group.gradeCm === 'HOJA' ? 0 : group.bunches ? group.subtotal / group.bunches : 0;
+    group.unitPriceStem = group.gradeCm === 'HOJA' ? group.subtotal / group.stems : 0;
     groups[key] = group;
     return groups;
   }, {}));
@@ -377,7 +383,7 @@ function renderDocument(data) {
     ${data.status === 'ANULADA' ? '<div class="doc-canceled-mark">ANULADA</div>' : ''}
     <header class="doc-head"><div class="doc-brand"><span class="brand-logo brand-logo--document"><img src="/logo-prestige.jpeg" alt="Prestige Roses"></span><div><h2>${escapeHtml(company.companyName)}</h2><p>${escapeHtml(company.companyNit ? `NIT: ${company.companyNit}` : 'Salida nacional de flor')}</p></div></div><div class="doc-number"><span>REMISIÓN</span><strong>${data.status === 'ANULADA' ? 'ANULADA' : escapeHtml(data.remissionNumber || 'Pendiente')}</strong><p>${dateTime(data.createdAt)}</p></div></header>
     <section class="doc-client"><div class="doc-field"><span>Cliente</span><strong>${escapeHtml(data.clientName)}</strong></div><div class="doc-field"><span>NIT / Documento</span><strong>${escapeHtml(data.clientDocument || '—')}</strong></div><div class="doc-field"><span>Entregado por</span><strong>${escapeHtml(data.deliveredBy || '—')}</strong></div></section>
-    <table class="doc-table"><thead><tr><th>Variedad</th><th>Grado</th><th>Tallos/ramo</th><th>Ramos</th><th>Total tallos</th><th>Precio ramo</th><th>Subtotal</th></tr></thead><tbody>${displayItems.map(item => `<tr><td><strong>${escapeHtml(item.variety)}</strong></td><td>${['40', '50', '60'].includes(item.gradeCm) ? `Exportación ${item.gradeCm} cm` : escapeHtml(item.gradeCm || '—')}</td><td>${number(item.stemsPerBunch)}</td><td>${number(item.bunches)}</td><td>${number(item.stems)}</td><td>${state.editingDocumentPrices ? `<input class="doc-price-input" type="number" min="1" step="1" value="${Number(item.unitPriceBunch)}" data-document-price="${item.ids.join(',')}" data-document-original-prices="${item.originalPrices.join(',')}" data-document-display-price="${Number(item.unitPriceBunch)}" aria-label="Precio por ramo de ${escapeHtml(item.variety)}">` : money(item.unitPriceBunch)}</td><td>${money(item.subtotal)}</td></tr>`).join('')}</tbody><tfoot><tr class="doc-table-totals"><td colspan="3"><strong>TOTALES</strong></td><td><strong>${number(totalBunches)} ramos</strong></td><td><strong>${number(totalStems)} tallos</strong></td><td></td><td><strong>${money(data.total)}</strong></td></tr></tfoot></table>
+    <table class="doc-table"><thead><tr><th>Variedad</th><th>Grado</th><th>Tallos/ramo</th><th>Ramos</th><th>Total tallos</th><th>Precio / unidad</th><th>Subtotal</th></tr></thead><tbody>${displayItems.map(item => `<tr><td><strong>${escapeHtml(item.variety)}</strong></td><td>${['40', '50', '60'].includes(item.gradeCm) ? `Exportación ${item.gradeCm} cm` : escapeHtml(item.gradeCm || '—')}</td><td>${item.gradeCm === 'HOJA' ? '—' : number(item.stemsPerBunch)}</td><td>${item.gradeCm === 'HOJA' ? '—' : number(item.bunches)}</td><td>${number(item.stems)}</td><td>${state.editingDocumentPrices ? `<input class="doc-price-input" type="number" min="1" step="1" value="${Number(item.gradeCm === 'HOJA' ? item.unitPriceStem : item.unitPriceBunch)}" data-document-price="${item.ids.join(',')}" data-document-original-prices="${item.originalPrices.join(',')}" data-document-display-price="${Number(item.gradeCm === 'HOJA' ? item.unitPriceStem : item.unitPriceBunch)}" aria-label="Precio por ${item.gradeCm === 'HOJA' ? 'tallo' : 'ramo'} de ${escapeHtml(item.variety)}">` : `${money(item.gradeCm === 'HOJA' ? item.unitPriceStem : item.unitPriceBunch)} / ${item.gradeCm === 'HOJA' ? 'tallo' : 'ramo'}`}</td><td>${money(item.subtotal)}</td></tr>`).join('')}</tbody><tfoot><tr class="doc-table-totals"><td colspan="3"><strong>TOTALES</strong></td><td><strong>${number(totalBunches)} ramos</strong></td><td><strong>${number(totalStems)} tallos</strong></td><td></td><td><strong>${money(data.total)}</strong></td></tr></tfoot></table>
     <div class="doc-total"><span>TOTAL</span><span>${money(data.total)}</span></div>
     ${data.notes ? `<div class="doc-notes"><strong>Observaciones:</strong> ${escapeHtml(data.notes)}</div>` : ''}
     ${data.status === 'ANULADA' ? `<div class="doc-cancellation"><strong>Remisión anulada:</strong> ${escapeHtml(data.cancellationReason || 'Sin motivo registrado')} · ${data.canceledAt ? dateTime(data.canceledAt) : ''}</div>` : ''}
@@ -551,6 +557,15 @@ $('#add-line-button').addEventListener('click', () => {
 });
 
 $('#export-variety').innerHTML = '<option value="">Seleccione una variedad</option>' + varieties.map(variety => `<option value="${escapeHtml(variety)}">${escapeHtml(variety)}</option>`).join('');
+$('#price-variety').addEventListener('change', () => {
+  const form = $('#price-form');
+  if ($('#price-variety').value === 'EUCALIPTO') form.elements.gradeCm.value = 'HOJA';
+  else if (form.elements.gradeCm.value === 'HOJA') form.elements.gradeCm.value = 'NACIONAL';
+  $('#price-unit-label').firstChild.textContent = form.elements.gradeCm.value === 'HOJA' ? 'Precio por tallo (COP)' : 'Precio por ramo (COP)';
+});
+$('#price-form').elements.gradeCm.addEventListener('change', () => {
+  $('#price-unit-label').firstChild.textContent = $('#price-form').elements.gradeCm.value === 'HOJA' ? 'Precio por tallo (COP)' : 'Precio por ramo (COP)';
+});
 $('#add-export-button').addEventListener('click', () => {
   const variety = $('#export-variety').value;
   const gradeCm = $('#export-grade').value;
@@ -567,13 +582,24 @@ $('#add-export-button').addEventListener('click', () => {
   else state.lines.push({ type: 'export', key, variety, gradeCm, stemsPerBunch, bunches, stems: bunches * stemsPerBunch, unitPriceBunch: Number(price.pricePerBunch), subtotal: bunches * Number(price.pricePerBunch) });
   $('#export-variety').value = ''; $('#export-bunches').value = 1; renderLines();
 });
+$('#add-eucalyptus-button').addEventListener('click', () => {
+  const stems = Number($('#eucalyptus-stems').value);
+  const error = $('#eucalyptus-error'); error.textContent = '';
+  if (!Number.isSafeInteger(stems) || stems < 1) return error.textContent = 'Ingrese una cantidad válida de tallos.';
+  const price = selectedPrice($('#remission-client-name').value, 'EUCALIPTO', 'HOJA');
+  if (!price) return error.textContent = 'No hay precio por tallo de Eucalipto para este cliente. Regístrelo en Lista de precios.';
+  const existing = state.lines.find(row => row.type === 'eucalyptus');
+  if (existing) { existing.stems += stems; existing.subtotal = existing.stems * existing.unitPriceStem; }
+  else state.lines.push({ type: 'eucalyptus', key: 'eucalyptus', variety: 'EUCALIPTO', gradeCm: 'HOJA', stemsPerBunch: 0, bunches: 0, stems, unitPriceStem: Number(price.pricePerBunch), subtotal: stems * Number(price.pricePerBunch) });
+  $('#eucalyptus-stems').value = 25; renderLines();
+});
 
 $('#remission-form').addEventListener('submit', async event => {
   event.preventDefault();
   const button = event.submitter;
   $('#remission-error').textContent = '';
   if (!state.lines.length) return $('#remission-error').textContent = 'Agregue al menos una variedad.';
-  const payload = { ...Object.fromEntries(new FormData(event.currentTarget)), items: state.lines.map(line => line.type === 'export' ? { type: 'export', variety: line.variety, gradeCm: line.gradeCm, stemsPerBunch: line.stemsPerBunch, bunches: line.bunches } : { key: line.key, bunches: line.bunches }) };
+  const payload = { ...Object.fromEntries(new FormData(event.currentTarget)), items: state.lines.map(line => line.type === 'eucalyptus' ? { type: 'eucalyptus', stems: line.stems } : line.type === 'export' ? { type: 'export', variety: line.variety, gradeCm: line.gradeCm, stemsPerBunch: line.stemsPerBunch, bunches: line.bunches } : { key: line.key, bunches: line.bunches }) };
   button.disabled = true;
   try {
     const remission = await api('/api/remissions', { method: 'POST', body: JSON.stringify(payload) });
@@ -658,7 +684,7 @@ $('#save-document-prices').addEventListener('click', async event => {
     const unchanged = currentPrice === Number(input.dataset.documentDisplayPrice);
     return ids.map((id, index) => ({ id, unitPriceBunch: unchanged ? originalPrices[index] : currentPrice }));
   });
-  if (items.some(item => !(item.unitPriceBunch > 0))) return toast('Ingrese un precio por ramo mayor que cero para cada variedad.');
+  if (items.some(item => !(item.unitPriceBunch > 0))) return toast('Ingrese un precio por unidad mayor que cero para cada variedad.');
   event.currentTarget.disabled = true;
   try {
     const remission = await api(`/api/remissions/${state.activeRemission.id}/prices`, { method: 'PUT', body: JSON.stringify({ items }) });
