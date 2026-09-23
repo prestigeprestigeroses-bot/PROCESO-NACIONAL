@@ -22,6 +22,8 @@ const initialData = () => ({
     { id: 5, variety: 'Tibet', color: 'Blanco', bunches: 29, stems: 725, stemsPerBunch: 25, pricePerBunch: 19.75, pricePerStem: 0.79, updatedAt: new Date().toISOString() }
   ],
   remissions: [],
+  transfers: [],
+  nextTransferId: 1,
   nextPriceListId: 1,
   priceLists: []
 });
@@ -80,6 +82,8 @@ async function init() {
       memory = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
       memory.priceLists ||= [];
       memory.nextPriceListId ||= 1;
+      memory.transfers ||= [];
+      memory.nextTransferId ||= 1;
     } else {
       memory = initialData();
       persistMemory();
@@ -147,6 +151,24 @@ async function init() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE(client_key,variety,grade_cm)
     );
+    CREATE TABLE IF NOT EXISTS export_transfers (
+      id BIGSERIAL PRIMARY KEY,
+      variety VARCHAR(120) NOT NULL,
+      bunches INTEGER NOT NULL CHECK (bunches > 0),
+      stems INTEGER NOT NULL CHECK (stems > 0),
+      responsible VARCHAR(160) NOT NULL,
+      reason TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      canceled_at TIMESTAMPTZ
+    );
+    CREATE TABLE IF NOT EXISTS export_transfer_items (
+      id BIGSERIAL PRIMARY KEY,
+      transfer_id BIGINT NOT NULL REFERENCES export_transfers(id),
+      source_date DATE NOT NULL,
+      variety VARCHAR(120) NOT NULL,
+      stems_per_bunch INTEGER NOT NULL,
+      bunches INTEGER NOT NULL CHECK (bunches > 0)
+    );
     ALTER TABLE remission_items ALTER COLUMN inventory_id DROP NOT NULL;
     ALTER TABLE inventory ADD COLUMN IF NOT EXISTS color VARCHAR(80) NOT NULL DEFAULT '';
     ALTER TABLE inventory ADD COLUMN IF NOT EXISTS bunches INTEGER NOT NULL DEFAULT 0;
@@ -179,6 +201,7 @@ async function init() {
     CREATE INDEX IF NOT EXISTS idx_remissions_created_at ON remissions(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_remission_items_source ON remission_items(source_date,variety,grade_cm,stems_per_bunch);
     CREATE INDEX IF NOT EXISTS idx_price_lists_lookup ON price_lists(client_key,variety,grade_cm);
+    CREATE INDEX IF NOT EXISTS idx_export_transfer_items_source ON export_transfer_items(source_date,variety,stems_per_bunch);
   `);
 
   const countResult = await pool.query('SELECT COUNT(*)::int AS count FROM inventory');
@@ -262,13 +285,20 @@ async function listInventory() {
       JOIN remissions r ON r.id = ri.remission_id
       WHERE source_date IS NOT NULL AND r.status <> 'ANULADA'
       GROUP BY source_date,variety,grade_cm,stems_per_bunch
+    ), transferred AS (
+      SELECT ti.source_date,ti.variety,ti.stems_per_bunch,
+             SUM(ti.bunches)::int AS transferred_bunches
+      FROM export_transfer_items ti JOIN export_transfers t ON t.id=ti.transfer_id
+      WHERE t.canceled_at IS NULL
+      GROUP BY ti.source_date,ti.variety,ti.stems_per_bunch
     )
     SELECT source.source_date,source.variety,source.grade_cm,source.stems_per_bunch,source.updated_at,
-           GREATEST(source.source_bunches-COALESCE(used.used_bunches,0),0)::int AS bunches,
-           GREATEST(source.source_stems-COALESCE(used.used_stems,0),0)::int AS stems
+           GREATEST(source.source_bunches-COALESCE(used.used_bunches,0)-CASE WHEN source.grade_cm='BAJAS' THEN COALESCE(transferred.transferred_bunches,0) ELSE 0 END,0)::int AS bunches,
+           GREATEST(source.source_stems-COALESCE(used.used_stems,0)-CASE WHEN source.grade_cm='BAJAS' THEN COALESCE(transferred.transferred_bunches,0)*source.stems_per_bunch ELSE 0 END,0)::int AS stems
     FROM source
     LEFT JOIN used USING (source_date,variety,grade_cm,stems_per_bunch)
-    WHERE source.source_bunches-COALESCE(used.used_bunches,0) > 0
+    LEFT JOIN transferred ON transferred.source_date=source.source_date AND transferred.variety=source.variety AND transferred.stems_per_bunch=source.stems_per_bunch AND source.grade_cm='BAJAS'
+    WHERE source.source_bunches-COALESCE(used.used_bunches,0)-CASE WHEN source.grade_cm='BAJAS' THEN COALESCE(transferred.transferred_bunches,0) ELSE 0 END > 0
     ORDER BY source.source_date DESC,source.variety,source.grade_cm,source.stems_per_bunch
   `, [allowedGrades, businessTimeZone]);
   return result.rows.map(row => {
@@ -537,7 +567,8 @@ async function createRemission(input) {
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [requested.key]);
       const source = await client.query(`SELECT COUNT(*)::int AS source_bunches FROM public.scans WHERE ts::date=$1::date AND TRIM(variedad_nombre)=$2 AND UPPER(TRIM(grado_cm))=$3 AND tallos=$4`, [selected.sourceDate, selected.variety, selected.gradeCm, selected.stemsPerBunch]);
       const used = await client.query(`SELECT COALESCE(SUM(ri.bunches),0)::int AS used_bunches FROM remission_items ri JOIN remissions r ON r.id=ri.remission_id WHERE ri.source_date=$1::date AND ri.variety=$2 AND ri.grade_cm=$3 AND ri.stems_per_bunch=$4 AND r.status <> 'ANULADA'`, [selected.sourceDate, selected.variety, selected.gradeCm, selected.stemsPerBunch]);
-      const available = Number(source.rows[0].source_bunches) - Number(used.rows[0].used_bunches);
+      const transferred = selected.gradeCm === 'BAJAS' ? await client.query(`SELECT COALESCE(SUM(ti.bunches),0)::int AS bunches FROM export_transfer_items ti JOIN export_transfers t ON t.id=ti.transfer_id WHERE ti.source_date=$1::date AND ti.variety=$2 AND ti.stems_per_bunch=$3 AND t.canceled_at IS NULL`, [selected.sourceDate, selected.variety, selected.stemsPerBunch]) : null;
+      const available = Number(source.rows[0].source_bunches) - Number(used.rows[0].used_bunches) - Number(transferred?.rows[0].bunches || 0);
       if (requested.bunches > available) throw new Error(`Stock insuficiente de ${selected.variety}. Quedan ${Math.max(available, 0)} ramos.`);
       const priceResult = await client.query(
         `SELECT price_per_bunch FROM price_lists
@@ -610,7 +641,8 @@ async function assignRemissionItems(id, input) {
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [requested.key]);
       const source = await client.query(`SELECT COUNT(*)::int AS source_bunches FROM public.scans WHERE ts::date=$1::date AND TRIM(variedad_nombre)=$2 AND UPPER(TRIM(grado_cm))=$3 AND tallos=$4`, [selected.sourceDate, selected.variety, selected.gradeCm, selected.stemsPerBunch]);
       const used = await client.query(`SELECT COALESCE(SUM(ri.bunches),0)::int AS used_bunches FROM remission_items ri JOIN remissions r ON r.id=ri.remission_id WHERE ri.source_date=$1::date AND ri.variety=$2 AND ri.grade_cm=$3 AND ri.stems_per_bunch=$4 AND r.status <> 'ANULADA'`, [selected.sourceDate, selected.variety, selected.gradeCm, selected.stemsPerBunch]);
-      const available = Number(source.rows[0].source_bunches) - Number(used.rows[0].used_bunches);
+      const transferred = selected.gradeCm === 'BAJAS' ? await client.query(`SELECT COALESCE(SUM(ti.bunches),0)::int AS bunches FROM export_transfer_items ti JOIN export_transfers t ON t.id=ti.transfer_id WHERE ti.source_date=$1::date AND ti.variety=$2 AND ti.stems_per_bunch=$3 AND t.canceled_at IS NULL`, [selected.sourceDate, selected.variety, selected.stemsPerBunch]) : null;
+      const available = Number(source.rows[0].source_bunches) - Number(used.rows[0].used_bunches) - Number(transferred?.rows[0].bunches || 0);
       if (requested.bunches > available) throw new Error(`Stock insuficiente de ${selected.variety}. Quedan ${Math.max(available, 0)} ramos.`);
       detailRows.push({ ...selected, bunches: requested.bunches, stems: requested.bunches * selected.stemsPerBunch });
     }
@@ -702,6 +734,80 @@ async function cancelRemission(id, input) {
   return getRemission(id);
 }
 
+function cleanTransferInput(input) {
+  const variety = String(input.variety || '').trim();
+  const bunches = Number(input.bunches);
+  const responsible = String(input.responsible || '').trim();
+  const reason = String(input.reason || '').trim();
+  if (!variety) throw new Error('Seleccione una variedad de Bajas.');
+  if (!Number.isInteger(bunches) || bunches < 1) throw new Error('Ingrese una cantidad válida de ramos.');
+  if (!responsible) throw new Error('Ingrese el responsable del traslado.');
+  if (!reason) throw new Error('Ingrese el motivo del traslado.');
+  return { variety, bunches, responsible, reason };
+}
+
+async function listExportTransfers(limit = 100) {
+  if (!usePostgres) return [...memory.transfers].reverse().slice(0, limit);
+  const result = await pool.query('SELECT id,variety,bunches,stems,responsible,reason,created_at,canceled_at FROM export_transfers ORDER BY created_at DESC,id DESC LIMIT $1', [limit]);
+  return result.rows.map(row => ({ id: Number(row.id), variety: row.variety, bunches: Number(row.bunches), stems: Number(row.stems), responsible: row.responsible, reason: row.reason, createdAt: row.created_at, canceledAt: row.canceled_at }));
+}
+
+async function createExportTransfer(input) {
+  const clean = cleanTransferInput(input);
+  const candidates = (await listInventory()).filter(row => row.gradeCm === 'BAJAS' && normalizedText(row.variety) === normalizedText(clean.variety)).sort((a, b) => a.date.localeCompare(b.date) || a.stemsPerBunch - b.stemsPerBunch);
+  if (!usePostgres) {
+    let pending = clean.bunches;
+    const items = [];
+    for (const row of candidates) {
+      const stock = memory.inventory.find(item => inventoryKey({ ...item, date: dateOnly(item.date ?? item.updatedAt), gradeCm: item.gradeCm || 'NACIONAL' }) === row.key);
+      const use = Math.min(pending, stock?.bunches || 0);
+      if (use) { items.push({ key: row.key, bunches: use, stems: use * row.stemsPerBunch }); pending -= use; }
+    }
+    if (pending) throw new Error(`No hay suficientes ramos de Bajas. Disponibles: ${clean.bunches - pending}.`);
+    items.forEach(item => { const stock = memory.inventory.find(row => inventoryKey({ ...row, date: dateOnly(row.date ?? row.updatedAt), gradeCm: row.gradeCm || 'NACIONAL' }) === item.key); stock.bunches -= item.bunches; stock.stems -= item.stems; });
+    const transfer = { id: memory.nextTransferId++, variety: clean.variety, bunches: clean.bunches, stems: items.reduce((sum, row) => sum + row.stems, 0), responsible: clean.responsible, reason: clean.reason, createdAt: new Date().toISOString(), canceledAt: null, items };
+    memory.transfers.push(transfer); persistMemory(); return transfer;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    let pending = clean.bunches;
+    const items = [];
+    for (const row of candidates) {
+      if (!pending) break;
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [row.key]);
+      const stock = await client.query(`SELECT
+        (SELECT COUNT(*)::int FROM public.scans WHERE ts::date=$1::date AND TRIM(variedad_nombre)=$2 AND UPPER(TRIM(grado_cm))='BAJAS' AND tallos=$3) AS source_bunches,
+        (SELECT COALESCE(SUM(ri.bunches),0)::int FROM remission_items ri JOIN remissions r ON r.id=ri.remission_id WHERE ri.source_date=$1::date AND ri.variety=$2 AND ri.grade_cm='BAJAS' AND ri.stems_per_bunch=$3 AND r.status <> 'ANULADA') AS used_bunches,
+        (SELECT COALESCE(SUM(ti.bunches),0)::int FROM export_transfer_items ti JOIN export_transfers t ON t.id=ti.transfer_id WHERE ti.source_date=$1::date AND ti.variety=$2 AND ti.stems_per_bunch=$3 AND t.canceled_at IS NULL) AS transferred_bunches`, [row.date, row.variety, row.stemsPerBunch]);
+      const available = Math.max(0, Number(stock.rows[0].source_bunches) - Number(stock.rows[0].used_bunches) - Number(stock.rows[0].transferred_bunches));
+      const use = Math.min(pending, available);
+      if (use) { items.push({ sourceDate: row.date, variety: row.variety, stemsPerBunch: row.stemsPerBunch, bunches: use }); pending -= use; }
+    }
+    if (pending) throw new Error(`No hay suficientes ramos de Bajas. Disponibles: ${clean.bunches - pending}. Actualice el inventario.`);
+    const stems = items.reduce((sum, row) => sum + row.bunches * row.stemsPerBunch, 0);
+    const header = await client.query('INSERT INTO export_transfers (variety,bunches,stems,responsible,reason) VALUES ($1,$2,$3,$4,$5) RETURNING *', [clean.variety, clean.bunches, stems, clean.responsible, clean.reason]);
+    for (const item of items) await client.query('INSERT INTO export_transfer_items (transfer_id,source_date,variety,stems_per_bunch,bunches) VALUES ($1,$2,$3,$4,$5)', [header.rows[0].id, item.sourceDate, item.variety, item.stemsPerBunch, item.bunches]);
+    await client.query('COMMIT');
+    return { id: Number(header.rows[0].id), variety: clean.variety, bunches: clean.bunches, stems, responsible: clean.responsible, reason: clean.reason, createdAt: header.rows[0].created_at, canceledAt: null };
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
+}
+
+async function cancelExportTransfer(id) {
+  const transferId = Number(id);
+  if (!Number.isInteger(transferId) || transferId < 1) throw new Error('Traslado no válido.');
+  if (!usePostgres) {
+    const transfer = memory.transfers.find(row => row.id === transferId);
+    if (!transfer || transfer.canceledAt) throw new Error('Traslado no encontrado o ya anulado.');
+    transfer.items.forEach(item => { const stock = memory.inventory.find(row => inventoryKey({ ...row, date: dateOnly(row.date ?? row.updatedAt), gradeCm: row.gradeCm || 'NACIONAL' }) === item.key); if (stock) { stock.bunches += item.bunches; stock.stems += item.stems; } });
+    transfer.canceledAt = new Date().toISOString(); persistMemory(); return transfer;
+  }
+  const result = await pool.query('UPDATE export_transfers SET canceled_at=NOW() WHERE id=$1 AND canceled_at IS NULL RETURNING *', [transferId]);
+  if (!result.rows[0]) throw new Error('Traslado no encontrado o ya anulado.');
+  return { id: transferId, canceledAt: result.rows[0].canceled_at };
+}
+
 async function listRemissions(limit = 100) {
   if (!usePostgres) return memory.remissions.slice(0, limit);
   const result = await pool.query('SELECT * FROM remissions ORDER BY created_at DESC LIMIT $1', [limit]);
@@ -751,4 +857,4 @@ async function salesReport(from, to) {
   return result.rows.map(row => ({ remissionNumber: row.remission_number, createdAt: row.created_at, clientName: row.client_name, variety: row.variety, gradeCm: row.grade_cm, bunches: Number(row.bunches), stems: Number(row.stems), unitPriceBunch: Number(row.unit_price_bunch), subtotal: Number(row.subtotal) }));
 }
 
-module.exports = { init, listInventory, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, assignRemissionItems, setRemissionPrices, cancelRemission, renumberRemissions, listRemissions, getRemission, dashboard, salesReport, usePostgres };
+module.exports = { init, listInventory, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, assignRemissionItems, setRemissionPrices, cancelRemission, renumberRemissions, listExportTransfers, createExportTransfer, cancelExportTransfer, listRemissions, getRemission, dashboard, salesReport, usePostgres };

@@ -133,6 +133,9 @@ app.get('/api/reports/sales.xlsx', requireReportsAccess, async (request, respons
   } catch (error) { next(error); }
 });
 app.get('/api/inventory', requireAuth, async (_request, response, next) => { try { response.json(await store.listInventory()); } catch (error) { next(error); } });
+app.get('/api/export-transfers', requireAuth, async (_request, response, next) => { try { response.json(await store.listExportTransfers()); } catch (error) { next(error); } });
+app.post('/api/export-transfers', requireAuth, async (request, response, next) => { try { response.status(201).json(await store.createExportTransfer(request.body)); } catch (error) { next(error); } });
+app.put('/api/export-transfers/:id/cancel', requireAuth, async (request, response, next) => { try { response.json(await store.cancelExportTransfer(request.params.id)); } catch (error) { next(error); } });
 app.get('/api/price-lists', requireAuth, async (_request, response, next) => { try { response.json(await store.listPriceLists()); } catch (error) { next(error); } });
 app.put('/api/price-lists', requireAuth, async (request, response, next) => { try { response.json(await store.savePriceList(request.body)); } catch (error) { next(error); } });
 app.delete('/api/price-lists/:id', requireAuth, async (request, response, next) => { try { response.json(await store.deletePriceList(request.params.id)); } catch (error) { next(error); } });
@@ -148,7 +151,7 @@ app.use((_request, response) => response.sendFile(path.join(__dirname, 'public',
 
 app.use((error, _request, response, _next) => {
   console.error(error);
-  const known = /obligatori|insuficiente|negativ|no encontr|repetida|no es válida|precio por ramo|precio configurado|quedan|pendiente|exactamente|superar|asignadas|bloqueada|desbloquear|anulada|anulación/i.test(error.message);
+  const known = /obligatori|insuficiente|suficientes|negativ|no encontr|repetida|no es válida|no válido|cantidad válida|seleccione una variedad|ingrese el responsable|ingrese el motivo|precio por ramo|precio configurado|quedan|pendiente|exactamente|superar|asignadas|bloqueada|desbloquear|anulada|anulación/i.test(error.message);
   response.status(known ? 400 : 500).json({ error: known ? error.message : 'No fue posible completar la operación.' });
 });
 

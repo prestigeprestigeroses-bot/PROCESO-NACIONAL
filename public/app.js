@@ -1,5 +1,5 @@
 const varieties = ['FREEDOM', 'PINK FLOYD', 'MONDIAL', 'HUMMER', 'MOMENTUM', 'CORAL REEF', 'QUICK SAND', 'HILUX', 'CANDLELIGHT', 'DEEP PURPLE', 'SUMMERSAND', 'STAR PLATINUM', 'SHIMMER', 'PINK OHARA', 'WHITE OHARA', 'PINK MONDIAL', 'BLESSING', 'PINK AMARETO', 'TIFFANY', 'YELLOW BIKINI', 'QUEEN BERRY', 'MOODY BLUE', 'SWAN', 'HIGH MAGIC', 'EXPLORER', 'DANCING RED', 'VENDELA'];
-const state = { inventory: [], remissions: [], prices: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
+const state = { inventory: [], remissions: [], prices: [], transfers: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const money = value => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', currencyDisplay: 'code', maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -31,14 +31,16 @@ async function showApp() {
 }
 
 async function refreshAll() {
-  const [dashboard, config, prices] = await Promise.all([api('/api/dashboard'), api('/api/config'), api('/api/price-lists')]);
+  const [dashboard, config, prices, transfers] = await Promise.all([api('/api/dashboard'), api('/api/config'), api('/api/price-lists'), api('/api/export-transfers')]);
   state.inventory = dashboard.inventory;
   state.remissions = dashboard.remissions;
   state.config = config;
   state.prices = normalizePriceList(prices);
+  state.transfers = transfers;
   state.totals = dashboard.totals;
   renderDashboard(dashboard.totals);
   renderInventory();
+  renderTransfers();
   renderVarietyOptions();
   renderHistory();
   renderPrices();
@@ -98,6 +100,16 @@ function renderInventory() {
   </tr>`).join('');
   $('#inventory-empty').classList.toggle('is-hidden', rows.length > 0);
   $('#stock-summary').textContent = `${number(rows.reduce((sum, row) => sum + row.bunches, 0))} ramos · ${number(rows.reduce((sum, row) => sum + row.stems, 0))} tallos`;
+}
+
+function renderTransfers() {
+  const available = groupedInventory(state.inventory.filter(row => row.gradeCm === 'BAJAS'));
+  const select = $('#transfer-variety');
+  const selected = select.value;
+  select.innerHTML = '<option value="">Seleccione una variedad</option>' + available.map(row => `<option value="${escapeHtml(row.variety)}">${escapeHtml(row.variety)} · ${number(row.bunches)} ramos disponibles</option>`).join('');
+  select.value = selected;
+  $('#transfer-history-body').innerHTML = state.transfers.map(row => `<tr><td>${dateTime(row.createdAt)}</td><td><strong>${escapeHtml(row.variety)}</strong></td><td>${number(row.bunches)}</td><td>${number(row.stems)}</td><td>${escapeHtml(row.responsible)}</td><td>${escapeHtml(row.reason)}</td><td>${row.canceledAt ? '<span class="workflow-status workflow-status--canceled">Anulado</span>' : '<span class="workflow-status workflow-status--done">Registrado</span>'}</td><td>${row.canceledAt ? '' : `<button class="small-button small-button--danger" type="button" data-cancel-transfer="${row.id}">Anular</button>`}</td></tr>`).join('');
+  $('#transfer-history-empty').classList.toggle('is-hidden', state.transfers.length > 0);
 }
 
 function renderVarietyOptions() {
@@ -390,6 +402,22 @@ $$('[data-view]').forEach(button => button.addEventListener('click', () => switc
 $$('[data-go]').forEach(button => button.addEventListener('click', () => switchView(button.dataset.go)));
 $('#menu-button').addEventListener('click', () => $('#sidebar').classList.toggle('open'));
 $('#inventory-search').addEventListener('input', renderInventory);
+$('#export-transfer-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = event.submitter;
+  const error = $('#transfer-error');
+  error.textContent = '';
+  button.disabled = true;
+  try {
+    const payload = Object.fromEntries(new FormData(form));
+    await api('/api/export-transfers', { method: 'POST', body: JSON.stringify(payload) });
+    form.reset();
+    await refreshAll();
+    toast('Traslado registrado. Los ramos salieron de Bajas.');
+  } catch (requestError) { error.textContent = requestError.message; }
+  finally { button.disabled = false; }
+});
 $('#history-search').addEventListener('input', renderHistory);
 function setDateFilter(value) {
   state.selectedDate = value;
@@ -423,6 +451,7 @@ $('#remission-client-name').addEventListener('change', () => {
 document.addEventListener('click', async event => {
   const remissionButton = event.target.closest('[data-remission-id]');
   const cancelButton = event.target.closest('[data-cancel-remission]');
+  const cancelTransferButton = event.target.closest('[data-cancel-transfer]');
   const removeButton = event.target.closest('[data-remove-line]');
   const removePriceDraft = event.target.closest('[data-remove-price-draft]');
   const editPriceClient = event.target.closest('[data-edit-price-client]');
@@ -435,6 +464,14 @@ document.addEventListener('click', async event => {
     openRemission(remissionButton.dataset.remissionId);
   }
   if (cancelButton) openCancelRemission(cancelButton.dataset.cancelRemission);
+  if (cancelTransferButton && window.confirm('¿Anular este traslado y devolver los ramos a Bajas?')) {
+    cancelTransferButton.disabled = true;
+    try {
+      await api(`/api/export-transfers/${cancelTransferButton.dataset.cancelTransfer}/cancel`, { method: 'PUT', body: '{}' });
+      await refreshAll();
+      toast('Traslado anulado. Los ramos volvieron a Bajas.');
+    } catch (requestError) { toast(requestError.message); cancelTransferButton.disabled = false; }
+  }
   if (removeButton) { state.lines = state.lines.filter(row => row.key !== removeButton.dataset.removeLine); $('#remission-error').textContent = ''; renderLines(); }
   if (removePriceDraft) { state.priceDrafts.splice(Number(removePriceDraft.dataset.removePriceDraft), 1); renderPriceDrafts(); }
   if (varietyPickerToggle) {

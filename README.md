@@ -15,6 +15,7 @@ Aplicación web para controlar salidas nacionales de flor. Consulta existencias 
 - Toda la flor queda disponible inmediatamente, incluida la recibida el mismo día.
 - Cálculo automático de tallos usando la cantidad de tallos por ramo registrada en el inventario.
 - Anulación con motivo obligatorio, conservación del historial y devolución automática de la flor al inventario.
+- Traslado de ramos de Bajas a Exportación con responsable, motivo e historial; se descuentan de la disponibilidad sin modificar los escaneos y pueden devolverse anulando el traslado.
 - Documento A4 listo para imprimir o guardar como PDF, con firma y sello de recibido.
 - Historial de remisiones y reimpresión.
 - Acceso protegido por usuario y contraseña.
