@@ -50,8 +50,7 @@ function businessToday() {
 }
 
 function inventoryStartDate() {
-  const [year, month, day] = businessToday().split('-').map(Number);
-  return new Date(Date.UTC(year, month - 1, day - 1)).toISOString().slice(0, 10);
+  return '2026-09-21';
 }
 
 function inventoryKey(item) {
@@ -293,7 +292,7 @@ async function listInventory(includeZero = false) {
              MAX(ts) AS updated_at
       FROM public.scans
       WHERE UPPER(TRIM(grado_cm)) = ANY($1::text[])
-        AND ts::date >= ((NOW() AT TIME ZONE $2)::date - 1)
+        AND ts::date >= $2::date
         AND variedad_nombre IS NOT NULL AND TRIM(variedad_nombre) <> ''
         AND tallos IS NOT NULL AND tallos > 0
       GROUP BY ts::date,TRIM(variedad_nombre),UPPER(TRIM(grado_cm)),tallos
@@ -325,7 +324,7 @@ async function listInventory(includeZero = false) {
     LEFT JOIN transferred ON transferred.source_date=source.source_date AND transferred.variety=source.variety AND transferred.stems_per_bunch=source.stems_per_bunch AND source.grade_cm='BAJAS'
     WHERE $3::boolean OR source.source_bunches-COALESCE(used.used_bunches,0)-CASE WHEN source.grade_cm='BAJAS' THEN COALESCE(transferred.transferred_bunches,0) ELSE 0 END+COALESCE(adjusted.delta_bunches,0) > 0
     ORDER BY source.source_date DESC,source.variety,source.grade_cm,source.stems_per_bunch
-  `, [allowedGrades, businessTimeZone, includeZero]);
+  `, [allowedGrades, inventoryStartDate(), includeZero]);
   return result.rows.map(row => {
     const item = {
       date: dateOnly(row.source_date),
