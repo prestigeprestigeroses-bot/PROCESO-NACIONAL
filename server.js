@@ -133,6 +133,8 @@ app.get('/api/reports/sales.xlsx', requireReportsAccess, async (request, respons
   } catch (error) { next(error); }
 });
 app.get('/api/inventory', requireAuth, async (_request, response, next) => { try { response.json(await store.listInventory()); } catch (error) { next(error); } });
+app.get('/api/inventory/reconciliation', requireAuth, async (_request, response, next) => { try { response.json({ sources: await store.listInventory(true), adjustments: await store.listInventoryAdjustments() }); } catch (error) { next(error); } });
+app.post('/api/inventory/reconciliation', requireAuth, async (request, response, next) => { try { response.status(201).json(await store.reconcileInventory(request.body)); } catch (error) { next(error); } });
 app.get('/api/export-transfers', requireAuth, async (_request, response, next) => { try { response.json(await store.listExportTransfers()); } catch (error) { next(error); } });
 app.post('/api/export-transfers', requireAuth, async (request, response, next) => { try { response.status(201).json(await store.createExportTransfer(request.body)); } catch (error) { next(error); } });
 app.put('/api/export-transfers/:id/cancel', requireAuth, async (request, response, next) => { try { response.json(await store.cancelExportTransfer(request.params.id)); } catch (error) { next(error); } });
@@ -151,7 +153,7 @@ app.use((_request, response) => response.sendFile(path.join(__dirname, 'public',
 
 app.use((error, _request, response, _next) => {
   console.error(error);
-  const known = /obligatori|insuficiente|suficientes|negativ|no encontr|repetida|no es válida|no válido|cantidad válida|seleccione una variedad|ingrese el responsable|ingrese el motivo|precio por ramo|precio por tallo|precio mayor que cero|precio configurado|quedan|pendiente|exactamente|superar|asignadas|bloqueada|desbloquear|anulada|anulación/i.test(error.message);
+  const known = /obligatori|insuficiente|suficientes|negativ|no encontr|repetida|no es válida|no válido|cantidad válida|conteo válido|inventario cambió|coincide con el sistema|seleccione una variedad|ingrese el responsable|ingrese el motivo|precio por ramo|precio por tallo|precio mayor que cero|precio configurado|quedan|pendiente|exactamente|superar|asignadas|bloqueada|desbloquear|anulada|anulación/i.test(error.message);
   response.status(known ? 400 : 500).json({ error: known ? error.message : 'No fue posible completar la operación.' });
 });
 

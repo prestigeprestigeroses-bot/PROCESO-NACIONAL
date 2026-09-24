@@ -1,5 +1,5 @@
 const varieties = ['FREEDOM', 'PINK FLOYD', 'MONDIAL', 'HUMMER', 'MOMENTUM', 'CORAL REEF', 'QUICK SAND', 'HILUX', 'CANDLELIGHT', 'DEEP PURPLE', 'SUMMERSAND', 'STAR PLATINUM', 'SHIMMER', 'PINK OHARA', 'WHITE OHARA', 'PINK MONDIAL', 'BLESSING', 'PINK AMARETO', 'TIFFANY', 'YELLOW BIKINI', 'QUEEN BERRY', 'MOODY BLUE', 'SWAN', 'HIGH MAGIC', 'EXPLORER', 'DANCING RED', 'VENDELA'];
-const state = { inventory: [], remissions: [], prices: [], transfers: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
+const state = { inventory: [], reconciliationSources: [], adjustments: [], remissions: [], prices: [], transfers: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const money = value => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', currencyDisplay: 'code', maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -31,15 +31,18 @@ async function showApp() {
 }
 
 async function refreshAll() {
-  const [dashboard, config, prices, transfers] = await Promise.all([api('/api/dashboard'), api('/api/config'), api('/api/price-lists'), api('/api/export-transfers')]);
+  const [dashboard, config, prices, transfers, reconciliation] = await Promise.all([api('/api/dashboard'), api('/api/config'), api('/api/price-lists'), api('/api/export-transfers'), api('/api/inventory/reconciliation')]);
   state.inventory = dashboard.inventory;
   state.remissions = dashboard.remissions;
   state.config = config;
   state.prices = normalizePriceList(prices);
   state.transfers = transfers;
+  state.reconciliationSources = reconciliation.sources;
+  state.adjustments = reconciliation.adjustments;
   state.totals = dashboard.totals;
   renderDashboard(dashboard.totals);
   renderInventory();
+  renderReconciliation();
   renderTransfers();
   renderVarietyOptions();
   renderHistory();
@@ -100,6 +103,27 @@ function renderInventory() {
   </tr>`).join('');
   $('#inventory-empty').classList.toggle('is-hidden', rows.length > 0);
   $('#stock-summary').textContent = `${number(rows.reduce((sum, row) => sum + row.bunches, 0))} ramos · ${number(rows.reduce((sum, row) => sum + row.stems, 0))} tallos`;
+}
+
+function renderReconciliation() {
+  const select = $('#reconcile-source');
+  const selected = select.value;
+  select.innerHTML = '<option value="">Seleccione un lote</option>' + state.reconciliationSources.map(row => `<option value="${escapeHtml(row.key)}">${inventoryDate(row.date)} · ${escapeHtml(row.variety)} · ${escapeHtml(row.gradeCm)} · ${number(row.stemsPerBunch)} tallos/ramo · ${number(row.bunches)} ramos</option>`).join('');
+  select.value = selected;
+  if (select.value !== selected) $('#reconcile-counted').value = '';
+  updateReconciliationDifference();
+  $('#reconcile-history-body').innerHTML = state.adjustments.map(row => `<tr><td>${dateTime(row.createdAt)}</td><td><strong>${escapeHtml(row.variety)}</strong><br>${escapeHtml(row.gradeCm)} · ${inventoryDate(row.date)} · ${number(row.stemsPerBunch)} tallos/ramo</td><td>${number(row.beforeBunches)}</td><td><strong>${number(row.countedBunches)}</strong></td><td>${row.deltaBunches > 0 ? '+' : ''}${number(row.deltaBunches)}</td><td><strong>${escapeHtml(row.responsible)}</strong><br>${escapeHtml(row.reason)}</td></tr>`).join('');
+  $('#reconcile-history-empty').classList.toggle('is-hidden', state.adjustments.length > 0);
+}
+
+function updateReconciliationDifference() {
+  const source = state.reconciliationSources.find(row => row.key === $('#reconcile-source').value);
+  $('#reconcile-current').value = source ? source.bunches : '';
+  const countedValue = $('#reconcile-counted').value;
+  if (!source) return $('#reconcile-difference').textContent = 'Seleccione un lote para comparar el conteo.';
+  if (countedValue === '') return $('#reconcile-difference').textContent = `Sistema: ${number(source.bunches)} ramos. Ingrese el conteo físico.`;
+  const difference = Number(countedValue) - Number(source.bunches);
+  $('#reconcile-difference').textContent = difference === 0 ? 'Sin diferencia: no hace falta registrar un ajuste.' : `Diferencia: ${difference > 0 ? '+' : ''}${number(difference)} ramos (${difference > 0 ? 'aumentará' : 'disminuirá'} el inventario).`;
 }
 
 function renderTransfers() {
@@ -412,6 +436,29 @@ $$('[data-view]').forEach(button => button.addEventListener('click', () => switc
 $$('[data-go]').forEach(button => button.addEventListener('click', () => switchView(button.dataset.go)));
 $('#menu-button').addEventListener('click', () => $('#sidebar').classList.toggle('open'));
 $('#inventory-search').addEventListener('input', renderInventory);
+$('#reconcile-source').addEventListener('change', () => { $('#reconcile-counted').value = ''; $('#reconcile-error').textContent = ''; updateReconciliationDifference(); });
+$('#reconcile-counted').addEventListener('input', updateReconciliationDifference);
+$('#reconcile-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const source = state.reconciliationSources.find(row => row.key === $('#reconcile-source').value);
+  const countedBunches = Number($('#reconcile-counted').value);
+  const responsible = $('#reconcile-responsible').value.trim();
+  const reason = $('#reconcile-reason').value.trim();
+  const error = $('#reconcile-error'); error.textContent = '';
+  if (!source) return error.textContent = 'Seleccione un lote.';
+  if (!Number.isSafeInteger(countedBunches) || countedBunches < 0) return error.textContent = 'Ingrese un conteo válido de ramos.';
+  if (countedBunches === Number(source.bunches)) return error.textContent = 'El conteo coincide con el sistema; no hay diferencia que registrar.';
+  if (!responsible || !reason) return error.textContent = 'Responsable y motivo son obligatorios.';
+  if (!window.confirm(`¿Registrar el ajuste de ${source.variety} · ${source.gradeCm} de ${source.bunches} a ${countedBunches} ramos? Quedará en el historial.`)) return;
+  const button = event.submitter; button.disabled = true;
+  try {
+    await api('/api/inventory/reconciliation', { method: 'POST', body: JSON.stringify({ key: source.key, expectedBunches: source.bunches, countedBunches, responsible, reason }) });
+    $('#reconcile-source').value = ''; $('#reconcile-counted').value = ''; $('#reconcile-reason').value = '';
+    await refreshAll();
+    toast('Inventario conciliado. El ajuste quedó registrado en el historial.');
+  } catch (requestError) { error.textContent = requestError.message; }
+  finally { button.disabled = false; }
+});
 $('#export-transfer-form').addEventListener('submit', async event => {
   event.preventDefault();
   const form = event.currentTarget;
