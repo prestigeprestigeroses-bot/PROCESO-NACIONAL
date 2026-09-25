@@ -1,5 +1,5 @@
 const varieties = ['FREEDOM', 'PINK FLOYD', 'MONDIAL', 'HUMMER', 'MOMENTUM', 'CORAL REEF', 'QUICK SAND', 'HILUX', 'CANDLELIGHT', 'DEEP PURPLE', 'SUMMERSAND', 'STAR PLATINUM', 'SHIMMER', 'PINK OHARA', 'WHITE OHARA', 'PINK MONDIAL', 'BLESSING', 'PINK AMARETO', 'TIFFANY', 'YELLOW BIKINI', 'QUEEN BERRY', 'MOODY BLUE', 'SWAN', 'HIGH MAGIC', 'EXPLORER', 'DANCING RED', 'VENDELA'];
-const state = { inventory: [], reconciliationSources: [], adjustments: [], remissions: [], prices: [], transfers: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
+const state = { inventory: [], inventoryFingerprint: '', inventoryRequestVersion: 0, inventoryRefreshBusy: false, refreshVersion: 0, reconciliationSources: [], adjustments: [], remissions: [], prices: [], transfers: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const money = value => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', currencyDisplay: 'code', maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -31,8 +31,12 @@ async function showApp() {
 }
 
 async function refreshAll() {
-  const [dashboard, config, prices, transfers, reconciliation] = await Promise.all([api('/api/dashboard'), api('/api/config'), api('/api/price-lists'), api('/api/export-transfers'), api('/api/inventory/reconciliation')]);
-  state.inventory = dashboard.inventory;
+  const version = ++state.refreshVersion;
+  const inventoryVersion = ++state.inventoryRequestVersion;
+  const fresh = { cache: 'no-store' };
+  const [dashboard, config, prices, transfers, reconciliation] = await Promise.all([api('/api/dashboard', fresh), api('/api/config', fresh), api('/api/price-lists', fresh), api('/api/export-transfers', fresh), api('/api/inventory/reconciliation', fresh)]);
+  if (version !== state.refreshVersion) return;
+  if (inventoryVersion === state.inventoryRequestVersion) applyInventory(dashboard.inventory);
   state.remissions = dashboard.remissions;
   state.config = config;
   state.prices = normalizePriceList(prices);
@@ -44,9 +48,17 @@ async function refreshAll() {
   renderInventory();
   renderReconciliation();
   renderTransfers();
-  renderVarietyOptions();
   renderHistory();
   renderPrices();
+}
+
+function applyInventory(rows) {
+  const fingerprint = JSON.stringify(rows.map(row => [row.key, row.bunches, row.stems]));
+  if (fingerprint === state.inventoryFingerprint) return false;
+  state.inventory = rows;
+  state.inventoryFingerprint = fingerprint;
+  renderVarietyOptions();
+  return true;
 }
 
 function normalizePriceList(value) {
@@ -138,9 +150,34 @@ function renderTransfers() {
 
 function renderVarietyOptions() {
   const groups = remissionVarietyGroups();
+  const selected = $('#line-variety').value;
+  const pickerOpen = $('#line-variety-picker').classList.contains('is-open');
+  const pickerScroll = $('#line-variety-picker .variety-picker-menu')?.scrollTop || 0;
   $('#line-variety').innerHTML = '<option value="">Seleccione una variedad</option>' + groups.map(group => `<option value="${escapeHtml(group.key)}">${escapeHtml(group.variety)} · ${group.availableBunches} ${group.availableBunches === 1 ? 'ramo disponible' : 'ramos disponibles'}</option>`).join('') + (groups.length ? '' : '<option disabled>Sin inventario para este grado</option>');
+  $('#line-variety').value = selected;
   renderVarietyPicker(groups);
+  $('#line-variety-picker').classList.toggle('is-open', pickerOpen);
+  $('#line-variety-picker .variety-picker-trigger').setAttribute('aria-expanded', String(pickerOpen));
+  if (pickerOpen) $('#line-variety-picker .variety-picker-menu').scrollTop = pickerScroll;
   renderStockPreview();
+}
+
+async function refreshRemissionInventory(showMessage = false) {
+  if (state.inventoryRefreshBusy) return;
+  state.inventoryRefreshBusy = true;
+  const inventoryVersion = ++state.inventoryRequestVersion;
+  const button = $('#refresh-remission-inventory');
+  button.disabled = true;
+  try {
+    const rows = await api('/api/inventory', { cache: 'no-store' });
+    const changed = inventoryVersion === state.inventoryRequestVersion && applyInventory(rows);
+    if (showMessage) toast(changed ? 'Aparecieron nuevas existencias en la lista de variedades.' : 'Inventario al día; la remisión en curso se conserva.');
+  } catch (error) {
+    if (showMessage) toast(error.message);
+  } finally {
+    state.inventoryRefreshBusy = false;
+    button.disabled = false;
+  }
 }
 
 function remissionVarietyGroups() {
@@ -209,7 +246,9 @@ function selectedPrice(clientName, variety, gradeCm) {
 
 function renderPrices() {
   const prices = Array.isArray(state.prices) ? state.prices : [];
+  const selectedVariety = $('#price-variety').value;
   $('#price-variety').innerHTML = '<option value="">Seleccione una variedad</option>' + [...varieties, 'EUCALIPTO'].map(variety => `<option value="${escapeHtml(variety)}">${escapeHtml(variety)}</option>`).join('');
+  $('#price-variety').value = selectedVariety;
   const clients = [...new Set(prices.map(row => row.clientName).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   $('#known-clients').innerHTML = clients.map(client => `<option value="${escapeHtml(client)}"></option>`).join('');
   $('#price-count').textContent = `${prices.length} ${prices.length === 1 ? 'PRECIO' : 'PRECIOS'}`;
@@ -292,6 +331,7 @@ function switchView(view) {
   $('#sidebar').classList.remove('open');
   window.scrollTo({ top: 0, behavior: 'smooth' });
   if (view === 'history') loadFullHistory();
+  if (view === 'new-remission') refreshRemissionInventory();
 }
 
 function reportGroups(rows) {
@@ -333,8 +373,8 @@ function exportReport() {
   window.location.href = `/api/reports/sales.xlsx?from=${encodeURIComponent($('#report-from').value)}&to=${encodeURIComponent($('#report-to').value)}`;
 }
 
-async function loadFullHistory() {
-  try { state.remissions = await api('/api/remissions'); renderHistory(); } catch (error) { toast(error.message); }
+async function loadFullHistory(silent = false) {
+  try { state.remissions = await api('/api/remissions', { cache: 'no-store' }); renderHistory(); } catch (error) { if (!silent) toast(error.message); }
 }
 
 function toast(message) {
@@ -496,6 +536,7 @@ $('#dashboard-grade').addEventListener('change', event => setGradeFilter(event.t
 $('#inventory-grade').addEventListener('change', event => setGradeFilter(event.target.value));
 $$('[data-clear-filters]').forEach(button => button.addEventListener('click', () => { setDateFilter(''); setGradeFilter('ALL'); }));
 $('#step-grade-filter').addEventListener('change', event => { state.stepGrade = event.target.value; renderVarietyOptions(); });
+$('#refresh-remission-inventory').addEventListener('click', () => refreshRemissionInventory(true));
 $('#line-variety').addEventListener('change', renderStockPreview);
 $('#remission-client-name').addEventListener('input', renderStockPreview);
 $('#remission-client-name').addEventListener('change', () => {
@@ -661,7 +702,15 @@ $('#remission-form').addEventListener('submit', async event => {
   button.disabled = true;
   try {
     const remission = await api('/api/remissions', { method: 'POST', body: JSON.stringify(payload) });
-    renderDocument(remission); clearRemission(); await refreshAll(); $('#remission-dialog').showModal(); toast('Remisión finalizada. Inventario nacional actualizado.');
+    renderDocument(remission);
+    clearRemission();
+    $('#remission-dialog').showModal();
+    try {
+      await refreshAll();
+      toast('Remisión finalizada. Inventario y resumen actualizados.');
+    } catch {
+      toast('Remisión guardada. No se pudo actualizar la pantalla; use Actualizar inventario.');
+    }
   } catch (error) { $('#remission-error').textContent = error.message; }
   finally { button.disabled = false; }
 });
@@ -768,11 +817,21 @@ $('#print-document').addEventListener('click', () => {
   catch { showLogin(); }
 })();
 
-setInterval(() => {
+setInterval(async () => {
   const appVisible = !$('#app-shell').classList.contains('is-hidden');
-  if (appVisible && ['dashboard', 'inventory'].includes(state.activeView)) {
-    refreshAll().catch(() => {});
-  } else if (appVisible && state.activeView === 'history') {
-    loadFullHistory().catch(() => {});
-  }
+  if (!appVisible) return;
+  try {
+    await refreshAll();
+    if (state.activeView === 'history') await loadFullHistory(true);
+    if (state.activeView === 'reports' && state.reportsUnlocked && $('#report-from').value && $('#report-to').value) {
+      state.reportRows = await api(`/api/reports/sales?from=${encodeURIComponent($('#report-from').value)}&to=${encodeURIComponent($('#report-to').value)}`, { cache: 'no-store' });
+      renderReport();
+    }
+  } catch { /* La siguiente sincronización vuelve a intentarlo. */ }
 }, 10000);
+
+setInterval(() => {
+  if (!$('#app-shell').classList.contains('is-hidden') && state.activeView === 'new-remission' && document.visibilityState === 'visible') {
+    refreshRemissionInventory();
+  }
+}, 3000);

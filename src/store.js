@@ -927,13 +927,17 @@ async function getRemission(id) {
 }
 
 async function dashboard() {
-  const [inventory, remissions] = await Promise.all([listInventory(), listRemissions(8)]);
+  const [inventory, remissions, todaySalesResult] = await Promise.all([
+    listInventory(),
+    listRemissions(8),
+    usePostgres ? pool.query("SELECT COALESCE(SUM(total),0) AS total FROM remissions WHERE status='FINALIZADA' AND (created_at AT TIME ZONE $1)::date=(NOW() AT TIME ZONE $1)::date", [businessTimeZone]) : Promise.resolve(null)
+  ]);
   return {
     totals: {
       varieties: new Set(inventory.map(row => row.variety)).size,
       bunches: inventory.reduce((sum, row) => sum + row.bunches, 0),
       stems: inventory.reduce((sum, row) => sum + row.stems, 0),
-      todaySales: remissions.filter(row => row.status === 'FINALIZADA' && new Date(row.createdAt).toDateString() === new Date().toDateString()).reduce((sum, row) => sum + row.total, 0)
+      todaySales: usePostgres ? Number(todaySalesResult.rows[0].total) : memory.remissions.filter(row => row.status === 'FINALIZADA' && new Date(row.createdAt).toDateString() === new Date().toDateString()).reduce((sum, row) => sum + row.total, 0)
     },
     inventory,
     remissions

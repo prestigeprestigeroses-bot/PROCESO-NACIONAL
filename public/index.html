@@ -127,9 +127,11 @@
                 </article>
                 <article class="panel form-panel">
                   <div class="panel-title"><span>02</span><div><h3>Variedades y grados</h3><p>El precio se toma automáticamente de la lista configurada para este cliente.</p></div></div>
-                  <div class="step-filter-row step-filter-row--single">
+                  <div class="step-filter-row step-filter-row--remission">
                     <label>Filtrar por grado<select id="step-grade-filter"><option value="ALL">Todos los grados</option><option value="NACIONAL">Nacional</option><option value="BAJAS">Bajas</option><option value="NACIONAL GRANEL">Nacional granel</option></select></label>
+                    <button class="small-button" type="button" id="refresh-remission-inventory">↻ Actualizar inventario</button>
                   </div>
+                  <p class="remission-sync-hint">Esta lista consulta los nuevos escaneos cada 3 segundos, sin recargar la remisión.</p>
                   <label class="bajas-presentation" id="bajas-presentation-field">Tipo de Bajas<select id="bajas-presentation"><option value="BAJAS">Bajas</option><option value="BAJAS GRANEL">Bajas granel</option></select></label>
                   <div class="line-add line-add--complete">
                     <div class="variety-picker-field"><span>Variedad disponible</span><select id="line-variety" class="native-select-hidden" tabindex="-1" aria-hidden="true"><option value="">Seleccione una variedad</option></select><div class="variety-picker" id="line-variety-picker"></div></div>
