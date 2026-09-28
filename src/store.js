@@ -962,4 +962,61 @@ async function salesReport(from, to) {
   return result.rows.map(row => ({ remissionNumber: row.remission_number, createdAt: row.created_at, clientName: row.client_name, variety: row.variety, gradeCm: row.grade_cm, bunches: Number(row.bunches), stems: Number(row.stems), unitPriceBunch: Number(row.unit_price_bunch), unitPriceStem: Number(row.unit_price_stem), subtotal: Number(row.subtotal) }));
 }
 
-module.exports = { init, listInventory, listInventoryAdjustments, reconcileInventory, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, assignRemissionItems, setRemissionPrices, cancelRemission, renumberRemissions, listExportTransfers, createExportTransfer, cancelExportTransfer, listRemissions, getRemission, dashboard, salesReport, usePostgres };
+async function inventorySnapshot(cutoffDate) {
+  if (!usePostgres) throw new Error('El informe histórico de inventario requiere PostgreSQL.');
+  const result = await pool.query(`
+    WITH source AS (
+      SELECT ts::date AS source_date,TRIM(variedad_nombre) AS variety,UPPER(TRIM(grado_cm)) AS grade_cm,
+             tallos AS stems_per_bunch,COUNT(*)::int AS source_bunches
+      FROM public.scans
+      WHERE ts::date >= $1::date AND ts::date < $2::date
+        AND UPPER(TRIM(grado_cm)) = ANY($3::text[])
+        AND variedad_nombre IS NOT NULL AND TRIM(variedad_nombre) <> '' AND tallos > 0
+      GROUP BY ts::date,TRIM(variedad_nombre),UPPER(TRIM(grado_cm)),tallos
+    ), used AS (
+      SELECT ri.source_date,ri.variety,
+             CASE WHEN ri.grade_cm='BAJAS GRANEL' THEN 'BAJAS' ELSE ri.grade_cm END AS grade_cm,
+             ri.stems_per_bunch,SUM(ri.bunches)::int AS bunches
+      FROM remission_items ri JOIN remissions r ON r.id=ri.remission_id
+      WHERE ri.source_date IS NOT NULL AND r.finalized_at IS NOT NULL
+        AND (r.finalized_at AT TIME ZONE $4)::date < $2::date
+        AND (r.canceled_at IS NULL OR (r.canceled_at AT TIME ZONE $4)::date >= $2::date)
+      GROUP BY ri.source_date,ri.variety,CASE WHEN ri.grade_cm='BAJAS GRANEL' THEN 'BAJAS' ELSE ri.grade_cm END,ri.stems_per_bunch
+    ), transferred AS (
+      SELECT ti.source_date,ti.variety,ti.stems_per_bunch,SUM(ti.bunches)::int AS bunches
+      FROM export_transfer_items ti JOIN export_transfers t ON t.id=ti.transfer_id
+      WHERE (t.created_at AT TIME ZONE $4)::date < $2::date
+        AND (t.canceled_at IS NULL OR (t.canceled_at AT TIME ZONE $4)::date >= $2::date)
+      GROUP BY ti.source_date,ti.variety,ti.stems_per_bunch
+    ), adjusted AS (
+      SELECT source_date,variety,grade_cm,stems_per_bunch,SUM(delta_bunches)::int AS bunches
+      FROM inventory_adjustments
+      WHERE (created_at AT TIME ZONE $4)::date < $2::date
+      GROUP BY source_date,variety,grade_cm,stems_per_bunch
+    )
+    SELECT source.source_date,source.variety,source.grade_cm,source.stems_per_bunch,
+           GREATEST(source.source_bunches-COALESCE(used.bunches,0)
+             -CASE WHEN source.grade_cm='BAJAS' THEN COALESCE(transferred.bunches,0) ELSE 0 END
+             +COALESCE(adjusted.bunches,0),0)::int AS bunches
+    FROM source
+    LEFT JOIN used USING (source_date,variety,grade_cm,stems_per_bunch)
+    LEFT JOIN adjusted USING (source_date,variety,grade_cm,stems_per_bunch)
+    LEFT JOIN transferred ON transferred.source_date=source.source_date AND transferred.variety=source.variety
+      AND transferred.stems_per_bunch=source.stems_per_bunch AND source.grade_cm='BAJAS'
+    ORDER BY source.variety,source.grade_cm,source.source_date,source.stems_per_bunch
+  `, [inventoryStartDate(), cutoffDate, allowedGrades, businessTimeZone]);
+  return result.rows.filter(row => Number(row.bunches) > 0).map(row => ({ date: dateOnly(row.source_date), variety: row.variety, gradeCm: row.grade_cm, stemsPerBunch: Number(row.stems_per_bunch), bunches: Number(row.bunches), stems: Number(row.bunches) * Number(row.stems_per_bunch) }));
+}
+
+async function inventoryReport(from, to) {
+  const start = String(from || '').slice(0, 10);
+  const end = String(to || '').slice(0, 10);
+  const endDate = new Date(`${end}T00:00:00Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || start > end || Number.isNaN(endDate.getTime())) throw new Error('Seleccione un rango de fechas válido.');
+  endDate.setUTCDate(endDate.getUTCDate() + 1);
+  const closingCutoff = endDate.toISOString().slice(0, 10);
+  const [opening, closing] = await Promise.all([inventorySnapshot(start), inventorySnapshot(closingCutoff)]);
+  return { from: start, to: end, opening, closing };
+}
+
+module.exports = { init, listInventory, listInventoryAdjustments, reconcileInventory, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, assignRemissionItems, setRemissionPrices, cancelRemission, renumberRemissions, listExportTransfers, createExportTransfer, cancelExportTransfer, listRemissions, getRemission, dashboard, salesReport, inventoryReport, usePostgres };

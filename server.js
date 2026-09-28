@@ -109,9 +109,10 @@ app.get('/api/config', requireAuth, (_request, response) => response.json({
 }));
 app.get('/api/dashboard', requireAuth, async (_request, response, next) => { try { response.json(await store.dashboard()); } catch (error) { next(error); } });
 app.get('/api/reports/sales', requireReportsAccess, async (request, response, next) => { try { response.json(await store.salesReport(request.query.from, request.query.to)); } catch (error) { next(error); } });
+app.get('/api/reports/inventory', requireReportsAccess, async (request, response, next) => { try { response.json(await store.inventoryReport(request.query.from, request.query.to)); } catch (error) { next(error); } });
 app.get('/api/reports/sales.xlsx', requireReportsAccess, async (request, response, next) => {
   try {
-    const rows = await store.salesReport(request.query.from, request.query.to);
+    const [rows, inventory] = await Promise.all([store.salesReport(request.query.from, request.query.to), store.inventoryReport(request.query.from, request.query.to)]);
     const byVariety = new Map(); const byGrade = new Map();
     rows.forEach(row => {
       const varietyKey = `${row.variety}|${row.gradeCm}`;
@@ -122,10 +123,14 @@ app.get('/api/reports/sales.xlsx', requireReportsAccess, async (request, respons
     });
     const total = rows.reduce((sum, row) => sum + row.subtotal, 0);
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([{ 'Desde': request.query.from, 'Hasta': request.query.to, 'Total vendido COP': total, 'Ramos vendidos': rows.reduce((sum, row) => sum + row.bunches, 0), 'Tallos vendidos': rows.reduce((sum, row) => sum + row.stems, 0) }]), 'Resumen');
+    const sumStock = (items, field) => items.reduce((sum, row) => sum + Number(row[field] || 0), 0);
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([{ 'Desde': request.query.from, 'Hasta': request.query.to, 'Total vendido COP': total, 'Ramos vendidos': rows.reduce((sum, row) => sum + row.bunches, 0), 'Tallos vendidos': rows.reduce((sum, row) => sum + row.stems, 0), 'Ramos inventario inicial': sumStock(inventory.opening, 'bunches'), 'Tallos inventario inicial': sumStock(inventory.opening, 'stems'), 'Ramos inventario final': sumStock(inventory.closing, 'bunches'), 'Tallos inventario final': sumStock(inventory.closing, 'stems') }]), 'Resumen');
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([...byVariety.values()]), 'Por variedad');
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([...byGrade.values()]), 'Por grado');
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows.map(row => ({ Fecha: new Date(row.createdAt).toLocaleDateString('es-CO'), Remisión: row.remissionNumber, Cliente: row.clientName, Variedad: row.variety, Grado: row.gradeCm, Ramos: row.bunches, Tallos: row.stems, 'Unidad de precio': row.gradeCm === 'HOJA' ? 'Tallo' : 'Ramo', 'Precio unitario COP': row.gradeCm === 'HOJA' ? row.unitPriceStem : row.unitPriceBunch, 'Total COP': row.subtotal }))), 'Detalle remisiones');
+    const stockSheet = items => XLSX.utils.aoa_to_sheet([['Fecha de ingreso', 'Variedad', 'Grado', 'Tallos por ramo', 'Ramos', 'Tallos'], ...items.map(row => [row.date, row.variety, row.gradeCm, row.stemsPerBunch, row.bunches, row.stems])]);
+    XLSX.utils.book_append_sheet(workbook, stockSheet(inventory.opening), 'Inventario inicial');
+    XLSX.utils.book_append_sheet(workbook, stockSheet(inventory.closing), 'Inventario final');
     const output = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
     response.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     response.setHeader('Content-Disposition', `attachment; filename="informe-ventas-${request.query.from}-a-${request.query.to}.xlsx"`);

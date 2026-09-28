@@ -1,5 +1,5 @@
 const varieties = ['FREEDOM', 'PINK FLOYD', 'MONDIAL', 'HUMMER', 'MOMENTUM', 'CORAL REEF', 'QUICK SAND', 'HILUX', 'CANDLELIGHT', 'DEEP PURPLE', 'SUMMERSAND', 'STAR PLATINUM', 'SHIMMER', 'PINK OHARA', 'WHITE OHARA', 'PINK MONDIAL', 'BLESSING', 'PINK AMARETO', 'TIFFANY', 'YELLOW BIKINI', 'QUEEN BERRY', 'MOODY BLUE', 'SWAN', 'HIGH MAGIC', 'EXPLORER', 'DANCING RED', 'VENDELA'];
-const state = { inventory: [], inventoryFingerprint: '', inventoryRequestVersion: 0, inventoryRefreshBusy: false, refreshVersion: 0, reconciliationSources: [], adjustments: [], remissions: [], prices: [], transfers: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
+const state = { inventory: [], inventoryFingerprint: '', inventoryRequestVersion: 0, inventoryRefreshBusy: false, refreshVersion: 0, reconciliationSources: [], adjustments: [], remissions: [], prices: [], transfers: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], inventoryReport: null, reportRange: '', stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const money = value => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', currencyDisplay: 'code', maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -361,15 +361,43 @@ function renderReport() {
   if (!groups.length) $('#report-empty').innerHTML = '<strong>Sin ventas finalizadas</strong><span>No hay remisiones finalizadas en el período elegido.</span>';
 }
 
+function renderInventoryReport() {
+  const report = state.inventoryReport;
+  if (!report) return;
+  for (const [period, rows] of [['opening', report.opening], ['closing', report.closing]]) {
+    $(`#report-${period}-bunches`).textContent = number(rows.reduce((sum, row) => sum + Number(row.bunches || 0), 0));
+    $(`#report-${period}-stems`).textContent = number(rows.reduce((sum, row) => sum + Number(row.stems || 0), 0));
+  }
+  const groups = new Map();
+  for (const [period, rows] of [['opening', report.opening], ['closing', report.closing]]) {
+    for (const row of rows) {
+      const key = `${row.variety}|${row.gradeCm}`;
+      const group = groups.get(key) || { variety: row.variety, gradeCm: row.gradeCm, openingBunches: 0, openingStems: 0, closingBunches: 0, closingStems: 0 };
+      group[`${period}Bunches`] += Number(row.bunches || 0);
+      group[`${period}Stems`] += Number(row.stems || 0);
+      groups.set(key, group);
+    }
+  }
+  $('#report-inventory-body').innerHTML = [...groups.values()].sort((a, b) => a.variety.localeCompare(b.variety) || a.gradeCm.localeCompare(b.gradeCm)).map(row => `<tr><td><strong>${escapeHtml(row.variety)}</strong></td><td><span class="grade-chip">${escapeHtml(row.gradeCm)}</span></td><td class="quantity">${number(row.openingBunches)}</td><td class="quantity">${number(row.openingStems)}</td><td class="quantity">${number(row.closingBunches)}</td><td class="quantity">${number(row.closingStems)}</td></tr>`).join('');
+  $('#report-inventory-empty').classList.toggle('is-hidden', groups.size > 0);
+  if (!groups.size) $('#report-inventory-empty').innerHTML = '<strong>Sin inventario</strong><span>No hay flor nacional registrada en las fechas elegidas.</span>';
+}
+
 async function generateReport() {
   const from = $('#report-from').value; const to = $('#report-to').value;
   if (!from || !to) return toast('Seleccione las dos fechas para generar el informe.');
-  try { state.reportRows = await api(`/api/reports/sales?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`); renderReport(); }
+  if (from > to) return toast('La fecha inicial no puede ser posterior a la final.');
+  try {
+    const query = `from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+    const [rows, inventory] = await Promise.all([api(`/api/reports/sales?${query}`), api(`/api/reports/inventory?${query}`)]);
+    state.reportRows = rows; state.inventoryReport = inventory; state.reportRange = `${from}|${to}`;
+    renderReport(); renderInventoryReport();
+  }
   catch (error) { toast(error.message); }
 }
 
 function exportReport() {
-  if (!state.reportRows.length) return toast('Genere primero un informe con ventas para exportarlo.');
+  if (!state.inventoryReport || state.reportRange !== `${$('#report-from').value}|${$('#report-to').value}`) return toast('Genere primero el informe para las fechas elegidas.');
   window.location.href = `/api/reports/sales.xlsx?from=${encodeURIComponent($('#report-from').value)}&to=${encodeURIComponent($('#report-to').value)}`;
 }
 
@@ -824,8 +852,7 @@ setInterval(async () => {
     await refreshAll();
     if (state.activeView === 'history') await loadFullHistory(true);
     if (state.activeView === 'reports' && state.reportsUnlocked && $('#report-from').value && $('#report-to').value) {
-      state.reportRows = await api(`/api/reports/sales?from=${encodeURIComponent($('#report-from').value)}&to=${encodeURIComponent($('#report-to').value)}`, { cache: 'no-store' });
-      renderReport();
+      await generateReport();
     }
   } catch { /* La siguiente sincronización vuelve a intentarlo. */ }
 }, 10000);
