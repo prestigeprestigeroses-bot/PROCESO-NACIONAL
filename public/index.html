@@ -138,6 +138,7 @@
                     <label>Ramos<input id="line-bunches" type="number" min="1" value="1"></label>
                     <button class="button button--dark" type="button" id="add-line-button">Agregar</button>
                   </div>
+                  <label class="donation-choice"><input type="checkbox" id="line-donation"> Agregar estos ramos como donación (gratis)</label>
                   <div class="stock-preview" id="line-stock-preview">Seleccione una variedad para ver fecha, grado, tallos y disponibilidad.</div>
                   <p class="inline-error" id="line-error"></p>
                   <details class="export-entry" id="export-entry">
@@ -150,6 +151,7 @@
                       <label>Tallos por ramo<input id="export-stems" type="number" min="1" step="1" value="25"></label>
                       <button class="button button--dark" type="button" id="add-export-button">Agregar exportación</button>
                     </div>
+                    <label class="donation-choice"><input type="checkbox" id="export-donation"> Agregar como donación</label>
                     <p class="inline-error" id="export-error"></p>
                   </details>
                   <details class="export-entry" id="eucalyptus-entry">
@@ -159,6 +161,7 @@
                       <label>Tallos<input id="eucalyptus-stems" type="number" min="1" step="1" value="25"></label>
                       <button class="button button--dark" type="button" id="add-eucalyptus-button">Agregar Eucalipto</button>
                     </div>
+                    <label class="donation-choice"><input type="checkbox" id="eucalyptus-donation"> Agregar como donación</label>
                     <p class="inline-error" id="eucalyptus-error"></p>
                   </details>
                   <div class="remission-lines" id="remission-lines"></div>
@@ -221,6 +224,7 @@
           <div class="metric-grid report-metrics"><article class="metric metric--green"><span class="metric-label">TOTAL VENDIDO</span><strong id="report-money">COP $0</strong><small>remisiones finalizadas</small></article><article class="metric metric--gold"><span class="metric-label">RAMOS VENDIDOS</span><strong id="report-bunches">0</strong><small>en el período</small></article><article class="metric metric--coral"><span class="metric-label">TALLOS VENDIDOS</span><strong id="report-stems">0</strong><small>en el período</small></article></div>
           <div class="report-grade-grid" id="report-grades"></div>
           <article class="panel panel--table"><div class="panel-head"><div><h3>Ventas por variedad y grado</h3><p>Valores finales aplicados en las remisiones.</p></div></div><div class="table-wrap"><table><thead><tr><th>Variedad</th><th>Grado</th><th>Ramos</th><th>Tallos</th><th>Total vendido</th></tr></thead><tbody id="report-body"></tbody></table></div><div class="empty-state" id="report-empty"><strong>Seleccione un período</strong><span>Genere el informe para consultar las ventas.</span></div></article>
+          <article class="panel panel--table"><div class="panel-head"><div><h3>Donaciones entregadas</h3><p>Flor sin cobro, separada de las ventas. Se descuenta del inventario nacional cuando corresponde.</p></div></div><div class="table-wrap"><table><thead><tr><th>Variedad</th><th>Grado</th><th>Ramos</th><th>Tallos</th></tr></thead><tbody id="report-donations-body"></tbody></table></div><div class="empty-state" id="report-donations-empty"><strong>Sin donaciones</strong><span>No hay donaciones en el período elegido.</span></div></article>
         </section>
       </div>
     </main>

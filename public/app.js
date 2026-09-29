@@ -223,7 +223,7 @@ function statusMeta(status) {
 }
 
 function renderLines() {
-  $('#remission-lines').innerHTML = state.lines.map(line => `<div class="line-item line-item--complete"><strong>${escapeHtml(line.variety)}</strong><span>${line.type === 'eucalyptus' ? 'Hoja · precio por tallo' : line.type === 'export' ? `Exportación · ${escapeHtml(line.gradeCm)} cm` : `${escapeHtml(line.gradeCm)} · ${inventoryDate(line.date)}`}</span><span>${line.type === 'eucalyptus' ? '—' : bunchLabel(line.bunches)}</span><span>${number(line.stems)} tallos</span><b>${money(line.subtotal)}</b><button type="button" class="remove-line" data-remove-line="${escapeHtml(line.key)}" aria-label="Quitar ${escapeHtml(line.variety)}">×</button></div>`).join('');
+  $('#remission-lines').innerHTML = state.lines.map(line => `<div class="line-item line-item--complete${line.isDonation ? ' line-item--donation' : ''}"><strong>${escapeHtml(line.variety)}${line.isDonation ? ' · DONACIÓN' : ''}</strong><span>${line.type === 'eucalyptus' ? 'Hoja · precio por tallo' : line.type === 'export' ? `Exportación · ${escapeHtml(line.gradeCm)} cm` : `${escapeHtml(line.gradeCm)} · ${inventoryDate(line.date)}`}</span><span>${line.type === 'eucalyptus' ? '—' : bunchLabel(line.bunches)}</span><span>${number(line.stems)} tallos</span><b>${line.isDonation ? 'GRATIS' : money(line.subtotal)}</b><button type="button" class="remove-line" data-remove-line="${escapeHtml(line.key)}" aria-label="Quitar ${escapeHtml(line.variety)}">×</button></div>`).join('');
   const bunches = state.lines.reduce((sum, row) => sum + row.bunches, 0);
   const stems = state.lines.reduce((sum, row) => sum + row.stems, 0);
   const total = state.lines.reduce((sum, row) => sum + row.subtotal, 0);
@@ -346,7 +346,8 @@ function reportGroups(rows) {
 }
 
 function renderReport() {
-  const rows = state.reportRows;
+  const rows = state.reportRows.filter(row => !row.isDonation);
+  const donations = reportGroups(state.reportRows.filter(row => row.isDonation));
   const total = rows.reduce((sum, row) => sum + Number(row.subtotal || 0), 0);
   const bunches = rows.reduce((sum, row) => sum + Number(row.bunches || 0), 0);
   const stems = rows.reduce((sum, row) => sum + Number(row.stems || 0), 0);
@@ -359,6 +360,8 @@ function renderReport() {
   $('#report-body').innerHTML = groups.map(row => `<tr><td><strong>${escapeHtml(row.variety)}</strong></td><td><span class="grade-chip">${escapeHtml(row.gradeCm)}</span></td><td class="quantity">${number(row.bunches)}</td><td class="quantity">${number(row.stems)}</td><td class="money"><strong>${money(row.subtotal)}</strong></td></tr>`).join('');
   $('#report-empty').classList.toggle('is-hidden', groups.length > 0);
   if (!groups.length) $('#report-empty').innerHTML = '<strong>Sin ventas finalizadas</strong><span>No hay remisiones finalizadas en el período elegido.</span>';
+  $('#report-donations-body').innerHTML = donations.map(row => `<tr><td><strong>${escapeHtml(row.variety)}</strong></td><td><span class="grade-chip">${escapeHtml(row.gradeCm)}</span></td><td class="quantity">${number(row.bunches)}</td><td class="quantity">${number(row.stems)}</td></tr>`).join('');
+  $('#report-donations-empty').classList.toggle('is-hidden', donations.length > 0);
 }
 
 function renderInventoryReport() {
@@ -458,7 +461,7 @@ function renderDocument(data) {
   const totalBunches = data.items.reduce((sum, item) => sum + Number(item.bunches || 0), 0);
   const totalStems = data.items.reduce((sum, item) => sum + Number(item.stems || 0), 0);
   const displayItems = Object.values(data.items.reduce((groups, item) => {
-    const key = `${clientKey(item.variety)}|${item.gradeCm}`;
+    const key = `${clientKey(item.variety)}|${item.gradeCm}|${Boolean(item.isDonation)}`;
     const group = groups[key] || { ...item, ids: [], originalPrices: [], bunches: 0, stems: 0, subtotal: 0 };
     group.ids.push(item.id);
     group.originalPrices.push(Number(item.gradeCm === 'HOJA' ? item.unitPriceStem : item.unitPriceBunch));
@@ -477,7 +480,7 @@ function renderDocument(data) {
     ${data.status === 'ANULADA' ? '<div class="doc-canceled-mark">ANULADA</div>' : ''}
     <header class="doc-head"><div class="doc-brand"><span class="brand-logo brand-logo--document"><img src="/logo-prestige.jpeg" alt="Prestige Roses"></span><div><h2>${escapeHtml(company.companyName)}</h2><p>${escapeHtml(company.companyNit ? `NIT: ${company.companyNit}` : 'Salida nacional de flor')}</p></div></div><div class="doc-number"><span>REMISIÓN</span><strong>${data.status === 'ANULADA' ? 'ANULADA' : escapeHtml(data.remissionNumber || 'Pendiente')}</strong><p>${dateTime(data.createdAt)}</p></div></header>
     <section class="doc-client"><div class="doc-field"><span>Cliente</span><strong>${escapeHtml(data.clientName)}</strong></div><div class="doc-field"><span>NIT / Documento</span><strong>${escapeHtml(data.clientDocument || '—')}</strong></div><div class="doc-field"><span>Entregado por</span><strong>${escapeHtml(data.deliveredBy || '—')}</strong></div></section>
-    <table class="doc-table"><thead><tr><th>Variedad</th><th>Grado</th><th>Tallos/ramo</th><th>Ramos</th><th>Total tallos</th><th>Precio / unidad</th><th>Subtotal</th></tr></thead><tbody>${displayItems.map(item => `<tr><td><strong>${escapeHtml(item.variety)}</strong></td><td>${['40', '50', '60'].includes(item.gradeCm) ? `Exportación ${item.gradeCm} cm` : escapeHtml(item.gradeCm || '—')}</td><td>${item.gradeCm === 'HOJA' ? '—' : number(item.stemsPerBunch)}</td><td>${item.gradeCm === 'HOJA' ? '—' : number(item.bunches)}</td><td>${number(item.stems)}</td><td>${state.editingDocumentPrices ? `<input class="doc-price-input" type="number" min="1" step="1" value="${Number(item.gradeCm === 'HOJA' ? item.unitPriceStem : item.unitPriceBunch)}" data-document-price="${item.ids.join(',')}" data-document-original-prices="${item.originalPrices.join(',')}" data-document-display-price="${Number(item.gradeCm === 'HOJA' ? item.unitPriceStem : item.unitPriceBunch)}" aria-label="Precio por ${item.gradeCm === 'HOJA' ? 'tallo' : 'ramo'} de ${escapeHtml(item.variety)}">` : `${money(item.gradeCm === 'HOJA' ? item.unitPriceStem : item.unitPriceBunch)} / ${item.gradeCm === 'HOJA' ? 'tallo' : 'ramo'}`}</td><td>${money(item.subtotal)}</td></tr>`).join('')}</tbody><tfoot><tr class="doc-table-totals"><td colspan="3"><strong>TOTALES</strong></td><td><strong>${number(totalBunches)} ramos</strong></td><td><strong>${number(totalStems)} tallos</strong></td><td></td><td><strong>${money(data.total)}</strong></td></tr></tfoot></table>
+    <table class="doc-table"><thead><tr><th>Variedad</th><th>Grado</th><th>Tallos/ramo</th><th>Ramos</th><th>Total tallos</th><th>Precio / unidad</th><th>Subtotal</th></tr></thead><tbody>${displayItems.map(item => `<tr${item.isDonation ? ' class="doc-donation-row"' : ''}><td><strong>${escapeHtml(item.variety)}</strong>${item.isDonation ? '<br><span>DONACIÓN</span>' : ''}</td><td>${['40', '50', '60'].includes(item.gradeCm) ? `Exportación ${item.gradeCm} cm` : escapeHtml(item.gradeCm || '—')}</td><td>${item.gradeCm === 'HOJA' ? '—' : number(item.stemsPerBunch)}</td><td>${item.gradeCm === 'HOJA' ? '—' : number(item.bunches)}</td><td>${number(item.stems)}</td><td>${item.isDonation ? 'GRATIS' : state.editingDocumentPrices ? `<input class="doc-price-input" type="number" min="1" step="1" value="${Number(item.gradeCm === 'HOJA' ? item.unitPriceStem : item.unitPriceBunch)}" data-document-price="${item.ids.join(',')}" data-document-original-prices="${item.originalPrices.join(',')}" data-document-display-price="${Number(item.gradeCm === 'HOJA' ? item.unitPriceStem : item.unitPriceBunch)}" aria-label="Precio por ${item.gradeCm === 'HOJA' ? 'tallo' : 'ramo'} de ${escapeHtml(item.variety)}">` : `${money(item.gradeCm === 'HOJA' ? item.unitPriceStem : item.unitPriceBunch)} / ${item.gradeCm === 'HOJA' ? 'tallo' : 'ramo'}`}</td><td>${money(item.subtotal)}</td></tr>`).join('')}</tbody><tfoot><tr class="doc-table-totals"><td colspan="3"><strong>TOTALES</strong></td><td><strong>${number(totalBunches)} ramos</strong></td><td><strong>${number(totalStems)} tallos</strong></td><td></td><td><strong>${money(data.total)}</strong></td></tr></tfoot></table>
     <div class="doc-total"><span>TOTAL</span><span>${money(data.total)}</span></div>
     ${data.notes ? `<div class="doc-notes"><strong>Observaciones:</strong> ${escapeHtml(data.notes)}</div>` : ''}
     ${data.status === 'ANULADA' ? `<div class="doc-cancellation"><strong>Remisión anulada:</strong> ${escapeHtml(data.cancellationReason || 'Sin motivo registrado')} · ${data.canceledAt ? dateTime(data.canceledAt) : ''}</div>` : ''}
@@ -650,6 +653,7 @@ document.addEventListener('click', async event => {
 });
 
 $('#add-line-button').addEventListener('click', () => {
+  const isDonation = $('#line-donation').checked;
   const item = remissionVarietyGroups().find(row => row.key === $('#line-variety').value);
   const bunches = Math.max(0, Number.parseInt($('#line-bunches').value, 10) || 0);
   const error = $('#line-error'); error.textContent = '';
@@ -668,19 +672,19 @@ $('#add-line-button').addEventListener('click', () => {
     const available = remainingFor(source);
     if (!available) continue;
     const price = selectedPrice($('#remission-client-name').value, source.variety, gradeCm);
-    if (!price) return error.textContent = `No hay precio para ${source.variety} · ${gradeCm}. Regístrelo en Lista de precios.`;
+    if (!isDonation && !price) return error.textContent = `No hay precio para ${source.variety} · ${gradeCm}. Regístrelo en Lista de precios.`;
     const use = Math.min(pending, available);
     allocations.push({ source, gradeCm, price, use });
     pending -= use;
   }
   for (const { source, gradeCm, price, use } of allocations) {
-    const lineKey = source.gradeCm === 'BAJAS' ? `${source.key}:${gradeCm}` : source.key;
+    const lineKey = `${source.key}:${gradeCm}:${isDonation ? 'donacion' : 'venta'}`;
     const existing = state.lines.find(row => row.key === lineKey);
     if (existing) { existing.bunches += use; existing.stems = existing.bunches * existing.stemsPerBunch; existing.subtotal = existing.bunches * existing.unitPriceBunch; }
-    else state.lines.push({ key: lineKey, sourceKey: source.key, date: source.date, variety: source.variety, gradeCm, stemsPerBunch: source.stemsPerBunch, bunches: use, stems: use * source.stemsPerBunch, unitPriceBunch: price.pricePerBunch, subtotal: use * price.pricePerBunch });
+    else state.lines.push({ key: lineKey, sourceKey: source.key, date: source.date, variety: source.variety, gradeCm, stemsPerBunch: source.stemsPerBunch, bunches: use, stems: use * source.stemsPerBunch, unitPriceBunch: isDonation ? 0 : price.pricePerBunch, subtotal: isDonation ? 0 : use * price.pricePerBunch, isDonation });
   }
   $('#remission-error').textContent = '';
-  $('#line-variety').value = ''; $('#line-bunches').value = 1; renderVarietyOptions(); renderLines();
+  $('#line-variety').value = ''; $('#line-bunches').value = 1; $('#line-donation').checked = false; renderVarietyOptions(); renderLines();
 });
 
 $('#export-variety').innerHTML = '<option value="">Seleccione una variedad</option>' + varieties.map(variety => `<option value="${escapeHtml(variety)}">${escapeHtml(variety)}</option>`).join('');
@@ -694,6 +698,7 @@ $('#price-form').elements.gradeCm.addEventListener('change', () => {
   $('#price-unit-label').firstChild.textContent = $('#price-form').elements.gradeCm.value === 'HOJA' ? 'Precio por tallo (COP)' : 'Precio por ramo (COP)';
 });
 $('#add-export-button').addEventListener('click', () => {
+  const isDonation = $('#export-donation').checked;
   const variety = $('#export-variety').value;
   const gradeCm = $('#export-grade').value;
   const bunches = Number($('#export-bunches').value);
@@ -702,23 +707,24 @@ $('#add-export-button').addEventListener('click', () => {
   if (!variety) return error.textContent = 'Seleccione una variedad de exportación.';
   if (!Number.isSafeInteger(bunches) || bunches < 1 || !Number.isSafeInteger(stemsPerBunch) || stemsPerBunch < 1) return error.textContent = 'Ingrese ramos y tallos por ramo válidos.';
   const price = selectedPrice($('#remission-client-name').value, variety, gradeCm);
-  if (!price) return error.textContent = `No hay precio para ${variety} · exportación ${gradeCm} cm. Regístrelo en Lista de precios.`;
-  const key = `export:${clientKey(variety)}:${gradeCm}:${stemsPerBunch}`;
+  if (!isDonation && !price) return error.textContent = `No hay precio para ${variety} · exportación ${gradeCm} cm. Regístrelo en Lista de precios.`;
+  const key = `export:${clientKey(variety)}:${gradeCm}:${stemsPerBunch}:${isDonation ? 'donacion' : 'venta'}`;
   const existing = state.lines.find(row => row.key === key);
   if (existing) { existing.bunches += bunches; existing.stems = existing.bunches * stemsPerBunch; existing.subtotal = existing.bunches * existing.unitPriceBunch; }
-  else state.lines.push({ type: 'export', key, variety, gradeCm, stemsPerBunch, bunches, stems: bunches * stemsPerBunch, unitPriceBunch: Number(price.pricePerBunch), subtotal: bunches * Number(price.pricePerBunch) });
-  $('#export-variety').value = ''; $('#export-bunches').value = 1; renderLines();
+  else state.lines.push({ type: 'export', key, variety, gradeCm, stemsPerBunch, bunches, stems: bunches * stemsPerBunch, unitPriceBunch: isDonation ? 0 : Number(price.pricePerBunch), subtotal: isDonation ? 0 : bunches * Number(price.pricePerBunch), isDonation });
+  $('#export-variety').value = ''; $('#export-bunches').value = 1; $('#export-donation').checked = false; renderLines();
 });
 $('#add-eucalyptus-button').addEventListener('click', () => {
+  const isDonation = $('#eucalyptus-donation').checked;
   const stems = Number($('#eucalyptus-stems').value);
   const error = $('#eucalyptus-error'); error.textContent = '';
   if (!Number.isSafeInteger(stems) || stems < 1) return error.textContent = 'Ingrese una cantidad válida de tallos.';
   const price = selectedPrice($('#remission-client-name').value, 'EUCALIPTO', 'HOJA');
-  if (!price) return error.textContent = 'No hay precio por tallo de Eucalipto para este cliente. Regístrelo en Lista de precios.';
-  const existing = state.lines.find(row => row.type === 'eucalyptus');
+  if (!isDonation && !price) return error.textContent = 'No hay precio por tallo de Eucalipto para este cliente. Regístrelo en Lista de precios.';
+  const existing = state.lines.find(row => row.type === 'eucalyptus' && row.isDonation === isDonation);
   if (existing) { existing.stems += stems; existing.subtotal = existing.stems * existing.unitPriceStem; }
-  else state.lines.push({ type: 'eucalyptus', key: 'eucalyptus', variety: 'EUCALIPTO', gradeCm: 'HOJA', stemsPerBunch: 0, bunches: 0, stems, unitPriceStem: Number(price.pricePerBunch), subtotal: stems * Number(price.pricePerBunch) });
-  $('#eucalyptus-stems').value = 25; renderLines();
+  else state.lines.push({ type: 'eucalyptus', key: `eucalyptus:${isDonation ? 'donacion' : 'venta'}`, variety: 'EUCALIPTO', gradeCm: 'HOJA', stemsPerBunch: 0, bunches: 0, stems, unitPriceStem: isDonation ? 0 : Number(price.pricePerBunch), subtotal: isDonation ? 0 : stems * Number(price.pricePerBunch), isDonation });
+  $('#eucalyptus-stems').value = 25; $('#eucalyptus-donation').checked = false; renderLines();
 });
 
 $('#remission-form').addEventListener('submit', async event => {
@@ -726,7 +732,7 @@ $('#remission-form').addEventListener('submit', async event => {
   const button = event.submitter;
   $('#remission-error').textContent = '';
   if (!state.lines.length) return $('#remission-error').textContent = 'Agregue al menos una variedad.';
-  const payload = { ...Object.fromEntries(new FormData(event.currentTarget)), items: state.lines.map(line => line.type === 'eucalyptus' ? { type: 'eucalyptus', stems: line.stems } : line.type === 'export' ? { type: 'export', variety: line.variety, gradeCm: line.gradeCm, stemsPerBunch: line.stemsPerBunch, bunches: line.bunches } : { key: line.sourceKey || line.key, presentation: line.gradeCm === 'BAJAS GRANEL' ? 'BAJAS GRANEL' : 'BAJAS', bunches: line.bunches }) };
+  const payload = { ...Object.fromEntries(new FormData(event.currentTarget)), items: state.lines.map(line => line.type === 'eucalyptus' ? { type: 'eucalyptus', stems: line.stems, isDonation: line.isDonation } : line.type === 'export' ? { type: 'export', variety: line.variety, gradeCm: line.gradeCm, stemsPerBunch: line.stemsPerBunch, bunches: line.bunches, isDonation: line.isDonation } : { key: line.sourceKey || line.key, presentation: line.gradeCm === 'BAJAS GRANEL' ? 'BAJAS GRANEL' : 'BAJAS', bunches: line.bunches, isDonation: line.isDonation }) };
   button.disabled = true;
   try {
     const remission = await api('/api/remissions', { method: 'POST', body: JSON.stringify(payload) });

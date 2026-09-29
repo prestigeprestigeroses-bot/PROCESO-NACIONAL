@@ -144,6 +144,7 @@ async function init() {
       stems INTEGER NOT NULL DEFAULT 0 CHECK (stems >= 0),
       unit_price_bunch NUMERIC(12,2) NOT NULL DEFAULT 0,
       unit_price_stem NUMERIC(12,2) NOT NULL DEFAULT 0,
+      is_donation BOOLEAN NOT NULL DEFAULT FALSE,
       subtotal NUMERIC(14,2) NOT NULL DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS price_lists (
@@ -200,6 +201,7 @@ async function init() {
     ALTER TABLE remission_items ADD COLUMN IF NOT EXISTS source_date DATE;
     ALTER TABLE remission_items ADD COLUMN IF NOT EXISTS grade_cm VARCHAR(40);
     ALTER TABLE remission_items ADD COLUMN IF NOT EXISTS stems_per_bunch INTEGER;
+    ALTER TABLE remission_items ADD COLUMN IF NOT EXISTS is_donation BOOLEAN NOT NULL DEFAULT FALSE;
     ALTER TABLE remissions ADD COLUMN IF NOT EXISTS delivered_by VARCHAR(160) NOT NULL DEFAULT '';
     ALTER TABLE remissions ADD COLUMN IF NOT EXISTS status VARCHAR(40) NOT NULL DEFAULT 'FINALIZADA';
     ALTER TABLE remissions ADD COLUMN IF NOT EXISTS requested_bunches INTEGER NOT NULL DEFAULT 0;
@@ -452,7 +454,7 @@ function cleanRemissionInput(input) {
     if (row.type === 'eucalyptus') {
       const stems = Number(row.stems);
       if (!Number.isSafeInteger(stems) || stems <= 0) throw new Error('Ingrese una cantidad válida de tallos de Eucalipto.');
-      return { type: 'eucalyptus', key: 'eucalyptus', stems, bunches: 0 };
+      return { type: 'eucalyptus', key: 'eucalyptus', stems, bunches: 0, isDonation: row.isDonation === true };
     }
     const bunches = Number(row.bunches);
     if (!Number.isSafeInteger(bunches) || bunches <= 0) throw new Error('Ingrese una cantidad válida de ramos.');
@@ -461,18 +463,18 @@ function cleanRemissionInput(input) {
       const gradeCm = String(row.gradeCm || '').trim();
       const stemsPerBunch = Number(row.stemsPerBunch);
       if (!variety || !exportGrades.includes(gradeCm) || !Number.isSafeInteger(stemsPerBunch) || stemsPerBunch <= 0) throw new Error('Revise variedad, grado y tallos por ramo de exportación.');
-      return { type: 'export', key: `export:${normalizedText(variety)}:${gradeCm}:${stemsPerBunch}`, variety, gradeCm, stemsPerBunch, bunches };
+      return { type: 'export', key: `export:${normalizedText(variety)}:${gradeCm}:${stemsPerBunch}`, variety, gradeCm, stemsPerBunch, bunches, isDonation: row.isDonation === true };
     }
     const key = String(row.key || '');
     const selected = decodeInventoryKey(key);
     const presentation = row.presentation === 'BAJAS GRANEL' && selected.gradeCm === 'BAJAS' ? 'BAJAS GRANEL' : selected.gradeCm;
     if (row.presentation === 'BAJAS GRANEL' && selected.gradeCm !== 'BAJAS') throw new Error('Solo los ramos de Bajas pueden salir como Bajas granel.');
-    return { key, presentation, bunches };
+    return { key, presentation, bunches, isDonation: row.isDonation === true };
   });
   if (!items.length) throw new Error('Agregue al menos una variedad a la remisión.');
   const keys = new Set();
   for (const item of items) {
-    const uniqueKey = `${item.key}:${item.presentation || ''}`;
+    const uniqueKey = `${item.key}:${item.presentation || ''}:${item.isDonation}`;
     if (keys.has(uniqueKey)) throw new Error('Una variedad está repetida en la remisión.');
     keys.add(uniqueKey);
   }
@@ -624,15 +626,16 @@ async function createRemission(input) {
     const detailRows = selected.map(({ requested, decoded }, index) => {
       const saleGrade = requested.presentation || decoded.gradeCm;
       const price = resolveMemoryPrice(details.clientName, decoded.variety, saleGrade);
-      if (!price) throw new Error(`No hay precio configurado para ${decoded.variety} · ${saleGrade}. Regístrelo en Lista de precios.`);
-      const unitPriceBunch = Number(price.pricePerBunch);
+      if (!requested.isDonation && !price) throw new Error(`No hay precio configurado para ${decoded.variety} · ${saleGrade}. Regístrelo en Lista de precios.`);
+      const unitPriceBunch = requested.isDonation ? 0 : Number(price.pricePerBunch);
       return {
         id: index + 1, inventoryId: null, variety: decoded.variety, sourceDate: decoded.sourceDate,
         gradeCm: saleGrade, stemsPerBunch: decoded.stemsPerBunch, bunches: requested.bunches,
         stems: requested.type === 'eucalyptus' ? requested.stems : requested.bunches * decoded.stemsPerBunch,
         unitPriceBunch: requested.type === 'eucalyptus' ? 0 : unitPriceBunch,
         unitPriceStem: requested.type === 'eucalyptus' ? unitPriceBunch : 0,
-        subtotal: requested.type === 'eucalyptus' ? requested.stems * unitPriceBunch : requested.bunches * unitPriceBunch
+        subtotal: requested.type === 'eucalyptus' ? requested.stems * unitPriceBunch : requested.bunches * unitPriceBunch,
+        isDonation: requested.isDonation
       };
     });
     const requestedBunches = detailRows.reduce((sum, row) => sum + row.bunches, 0);
@@ -673,10 +676,10 @@ async function createRemission(input) {
          ORDER BY CASE WHEN client_key=$4 THEN 0 ELSE 1 END LIMIT 1`,
         [selected.variety, saleGrade, [normalizedText(details.clientName), generalPriceKey], normalizedText(details.clientName)]
       );
-      if (!priceResult.rows[0]) throw new Error(`No hay precio configurado para ${selected.variety} · ${saleGrade}. Regístrelo en Lista de precios.`);
-      const unitPriceBunch = Number(priceResult.rows[0].price_per_bunch);
+      if (!requested.isDonation && !priceResult.rows[0]) throw new Error(`No hay precio configurado para ${selected.variety} · ${saleGrade}. Regístrelo en Lista de precios.`);
+      const unitPriceBunch = requested.isDonation ? 0 : Number(priceResult.rows[0].price_per_bunch);
       const stems = requested.type === 'eucalyptus' ? requested.stems : requested.bunches * selected.stemsPerBunch;
-      detailRows.push({ ...selected, gradeCm: saleGrade, bunches: requested.bunches, stems, unitPriceBunch: requested.type === 'eucalyptus' ? 0 : unitPriceBunch, unitPriceStem: requested.type === 'eucalyptus' ? unitPriceBunch : 0, subtotal: (requested.type === 'eucalyptus' ? stems : requested.bunches) * unitPriceBunch });
+      detailRows.push({ ...selected, gradeCm: saleGrade, bunches: requested.bunches, stems, unitPriceBunch: requested.type === 'eucalyptus' ? 0 : unitPriceBunch, unitPriceStem: requested.type === 'eucalyptus' ? unitPriceBunch : 0, subtotal: (requested.type === 'eucalyptus' ? stems : requested.bunches) * unitPriceBunch, isDonation: requested.isDonation });
     }
     const requestedBunches = detailRows.reduce((sum, row) => sum + row.bunches, 0);
     const requestedStems = detailRows.reduce((sum, row) => sum + row.stems, 0);
@@ -694,9 +697,9 @@ async function createRemission(input) {
     const savedItems = [];
     for (const row of detailRows) {
       const saved = await client.query(
-        `INSERT INTO remission_items (remission_id,inventory_id,variety,source_date,grade_cm,stems_per_bunch,bunches,stems,unit_price_bunch,unit_price_stem,subtotal)
-         VALUES ($1,NULL,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-        [id, row.variety, row.sourceDate, row.gradeCm, row.stemsPerBunch, row.bunches, row.stems, row.unitPriceBunch, row.unitPriceStem, row.subtotal]
+        `INSERT INTO remission_items (remission_id,inventory_id,variety,source_date,grade_cm,stems_per_bunch,bunches,stems,unit_price_bunch,unit_price_stem,subtotal,is_donation)
+         VALUES ($1,NULL,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+        [id, row.variety, row.sourceDate, row.gradeCm, row.stemsPerBunch, row.bunches, row.stems, row.unitPriceBunch, row.unitPriceStem, row.subtotal, row.isDonation]
       );
       savedItems.push(saved.rows[0]);
     }
@@ -763,7 +766,7 @@ async function assignRemissionItems(id, input) {
 }
 
 function mapRemissionItem(row) {
-  return { id: Number(row.id), inventoryId: row.inventory_id ? Number(row.inventory_id) : null, variety: row.variety, sourceDate: row.source_date ? dateOnly(row.source_date) : null, gradeCm: row.grade_cm || '', stemsPerBunch: Number(row.stems_per_bunch || 0), bunches: Number(row.bunches), stems: Number(row.stems), unitPriceBunch: Number(row.unit_price_bunch), unitPriceStem: Number(row.unit_price_stem), subtotal: Number(row.subtotal) };
+  return { id: Number(row.id), inventoryId: row.inventory_id ? Number(row.inventory_id) : null, variety: row.variety, sourceDate: row.source_date ? dateOnly(row.source_date) : null, gradeCm: row.grade_cm || '', stemsPerBunch: Number(row.stems_per_bunch || 0), bunches: Number(row.bunches), stems: Number(row.stems), unitPriceBunch: Number(row.unit_price_bunch), unitPriceStem: Number(row.unit_price_stem), subtotal: Number(row.subtotal), isDonation: row.is_donation ?? row.isDonation ?? false };
 }
 
 async function setRemissionPrices(id, input) {
@@ -772,7 +775,7 @@ async function setRemissionPrices(id, input) {
     const remission = memory.remissions.find(row => row.id === Number(id));
     if (!remission) throw new Error('Remisión no encontrada.');
     if (!['PENDIENTE_PRECIOS', 'FINALIZADA'].includes(remission.status)) throw new Error('Solo se pueden editar precios de remisiones finalizadas.');
-    remission.items.forEach(item => { const price = prices.get(Number(item.id)); if (!(price > 0)) throw new Error('Ingrese un precio mayor que cero para cada variedad.'); if (item.gradeCm === 'HOJA') item.unitPriceStem = price; else item.unitPriceBunch = price; item.subtotal = (item.gradeCm === 'HOJA' ? item.stems : item.bunches) * price; });
+    remission.items.forEach(item => { if (item.isDonation) return; const price = prices.get(Number(item.id)); if (!(price > 0)) throw new Error('Ingrese un precio mayor que cero para cada variedad.'); if (item.gradeCm === 'HOJA') item.unitPriceStem = price; else item.unitPriceBunch = price; item.subtotal = (item.gradeCm === 'HOJA' ? item.stems : item.bunches) * price; });
     remission.total = remission.items.reduce((sum, row) => sum + row.subtotal, 0); remission.status = 'FINALIZADA'; remission.finalizedAt ||= new Date().toISOString();
     persistMemory(); return remission;
   }
@@ -786,6 +789,7 @@ async function setRemissionPrices(id, input) {
     if (!details.rows.length) throw new Error('La remisión no tiene variedades asignadas.');
     let total = 0;
     for (const row of details.rows) {
+      if (row.is_donation) continue;
       const price = prices.get(Number(row.id));
       if (!(price > 0)) throw new Error('Ingrese un precio mayor que cero para cada variedad.');
       const subtotal = Number(row.grade_cm === 'HOJA' ? row.stems : row.bunches) * price; total += subtotal;
@@ -953,13 +957,13 @@ async function salesReport(from, to) {
   }
   const result = await pool.query(`
     SELECT r.remission_number,r.created_at,r.client_name,
-           ri.variety,ri.grade_cm,ri.bunches,ri.stems,ri.unit_price_bunch,ri.unit_price_stem,ri.subtotal
+           ri.variety,ri.grade_cm,ri.bunches,ri.stems,ri.unit_price_bunch,ri.unit_price_stem,ri.subtotal,ri.is_donation
     FROM remissions r
     JOIN remission_items ri ON ri.remission_id=r.id
     WHERE r.status='FINALIZADA'
       AND (r.created_at AT TIME ZONE $3)::date BETWEEN $1::date AND $2::date
     ORDER BY r.created_at DESC,ri.variety`, [start, end, businessTimeZone]);
-  return result.rows.map(row => ({ remissionNumber: row.remission_number, createdAt: row.created_at, clientName: row.client_name, variety: row.variety, gradeCm: row.grade_cm, bunches: Number(row.bunches), stems: Number(row.stems), unitPriceBunch: Number(row.unit_price_bunch), unitPriceStem: Number(row.unit_price_stem), subtotal: Number(row.subtotal) }));
+  return result.rows.map(row => ({ remissionNumber: row.remission_number, createdAt: row.created_at, clientName: row.client_name, variety: row.variety, gradeCm: row.grade_cm, bunches: Number(row.bunches), stems: Number(row.stems), unitPriceBunch: Number(row.unit_price_bunch), unitPriceStem: Number(row.unit_price_stem), subtotal: Number(row.subtotal), isDonation: row.is_donation }));
 }
 
 async function inventorySnapshot(cutoffDate) {

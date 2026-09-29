@@ -112,7 +112,9 @@ app.get('/api/reports/sales', requireReportsAccess, async (request, response, ne
 app.get('/api/reports/inventory', requireReportsAccess, async (request, response, next) => { try { response.json(await store.inventoryReport(request.query.from, request.query.to)); } catch (error) { next(error); } });
 app.get('/api/reports/sales.xlsx', requireReportsAccess, async (request, response, next) => {
   try {
-    const [rows, inventory] = await Promise.all([store.salesReport(request.query.from, request.query.to), store.inventoryReport(request.query.from, request.query.to)]);
+    const [allRows, inventory] = await Promise.all([store.salesReport(request.query.from, request.query.to), store.inventoryReport(request.query.from, request.query.to)]);
+    const rows = allRows.filter(row => !row.isDonation);
+    const donations = allRows.filter(row => row.isDonation);
     const byVariety = new Map(); const byGrade = new Map();
     rows.forEach(row => {
       const varietyKey = `${row.variety}|${row.gradeCm}`;
@@ -128,6 +130,7 @@ app.get('/api/reports/sales.xlsx', requireReportsAccess, async (request, respons
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([...byVariety.values()]), 'Por variedad');
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([...byGrade.values()]), 'Por grado');
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows.map(row => ({ Fecha: new Date(row.createdAt).toLocaleDateString('es-CO'), Remisión: row.remissionNumber, Cliente: row.clientName, Variedad: row.variety, Grado: row.gradeCm, Ramos: row.bunches, Tallos: row.stems, 'Unidad de precio': row.gradeCm === 'HOJA' ? 'Tallo' : 'Ramo', 'Precio unitario COP': row.gradeCm === 'HOJA' ? row.unitPriceStem : row.unitPriceBunch, 'Total COP': row.subtotal }))), 'Detalle remisiones');
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Fecha', 'Remisión', 'Cliente', 'Variedad', 'Grado', 'Ramos donados', 'Tallos donados'], ...donations.map(row => [new Date(row.createdAt).toLocaleDateString('es-CO'), row.remissionNumber, row.clientName, row.variety, row.gradeCm, row.bunches, row.stems])]), 'Donaciones');
     const stockSheet = items => XLSX.utils.aoa_to_sheet([['Fecha de ingreso', 'Variedad', 'Grado', 'Tallos por ramo', 'Ramos', 'Tallos'], ...items.map(row => [row.date, row.variety, row.gradeCm, row.stemsPerBunch, row.bunches, row.stems])]);
     XLSX.utils.book_append_sheet(workbook, stockSheet(inventory.opening), 'Inventario inicial');
     XLSX.utils.book_append_sheet(workbook, stockSheet(inventory.closing), 'Inventario final');
