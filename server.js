@@ -146,6 +146,9 @@ app.post('/api/inventory/reconciliation', requireAuth, async (request, response,
 app.get('/api/export-transfers', requireAuth, async (_request, response, next) => { try { response.json(await store.listExportTransfers()); } catch (error) { next(error); } });
 app.post('/api/export-transfers', requireAuth, async (request, response, next) => { try { response.status(201).json(await store.createExportTransfer(request.body)); } catch (error) { next(error); } });
 app.put('/api/export-transfers/:id/cancel', requireAuth, async (request, response, next) => { try { response.json(await store.cancelExportTransfer(request.params.id)); } catch (error) { next(error); } });
+app.get('/api/inventory/waste', requireAuth, async (_request, response, next) => { try { response.json(await store.listWaste()); } catch (error) { next(error); } });
+app.post('/api/inventory/waste', requireAuth, async (request, response, next) => { try { response.status(201).json(await store.createWaste(request.body)); } catch (error) { next(error); } });
+app.put('/api/inventory/waste/:id/cancel', requireAuth, async (request, response, next) => { try { response.json(await store.cancelWaste(request.params.id, request.body)); } catch (error) { next(error); } });
 app.get('/api/price-lists', requireAuth, async (_request, response, next) => { try { response.json(await store.listPriceLists()); } catch (error) { next(error); } });
 app.put('/api/price-lists', requireAuth, async (request, response, next) => { try { response.json(await store.savePriceList(request.body)); } catch (error) { next(error); } });
 app.delete('/api/price-lists/:id', requireAuth, async (request, response, next) => { try { response.json(await store.deletePriceList(request.params.id)); } catch (error) { next(error); } });

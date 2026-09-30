@@ -26,6 +26,8 @@ const initialData = () => ({
   remissions: [],
   transfers: [],
   nextTransferId: 1,
+  waste: [],
+  nextWasteId: 1,
   adjustments: [],
   nextAdjustmentId: 1,
   nextPriceListId: 1,
@@ -87,6 +89,8 @@ async function init() {
       memory.nextPriceListId ||= 1;
       memory.transfers ||= [];
       memory.nextTransferId ||= 1;
+      memory.waste ||= [];
+      memory.nextWasteId ||= 1;
       memory.adjustments ||= [];
       memory.nextAdjustmentId ||= 1;
     } else {
@@ -175,6 +179,19 @@ async function init() {
       stems_per_bunch INTEGER NOT NULL,
       bunches INTEGER NOT NULL CHECK (bunches > 0)
     );
+    CREATE TABLE IF NOT EXISTS inventory_waste (
+      id BIGSERIAL PRIMARY KEY,
+      source_date DATE NOT NULL,
+      variety VARCHAR(120) NOT NULL,
+      grade_cm VARCHAR(40) NOT NULL,
+      stems_per_bunch INTEGER NOT NULL CHECK (stems_per_bunch > 0),
+      bunches INTEGER NOT NULL CHECK (bunches > 0),
+      responsible VARCHAR(160) NOT NULL,
+      reason TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      canceled_at TIMESTAMPTZ,
+      cancellation_reason TEXT
+    );
     CREATE TABLE IF NOT EXISTS inventory_adjustments (
       id BIGSERIAL PRIMARY KEY,
       source_date DATE NOT NULL,
@@ -223,6 +240,7 @@ async function init() {
     CREATE INDEX IF NOT EXISTS idx_price_lists_lookup ON price_lists(client_key,variety,grade_cm);
     CREATE INDEX IF NOT EXISTS idx_export_transfer_items_source ON export_transfer_items(source_date,variety,stems_per_bunch);
     CREATE INDEX IF NOT EXISTS idx_inventory_adjustments_source ON inventory_adjustments(source_date,variety,grade_cm,stems_per_bunch);
+    CREATE INDEX IF NOT EXISTS idx_inventory_waste_source ON inventory_waste(source_date,variety,grade_cm,stems_per_bunch);
   `);
 
   const countResult = await pool.query('SELECT COUNT(*)::int AS count FROM inventory');
@@ -316,15 +334,20 @@ async function listInventory(includeZero = false) {
       FROM export_transfer_items ti JOIN export_transfers t ON t.id=ti.transfer_id
       WHERE t.canceled_at IS NULL
       GROUP BY ti.source_date,ti.variety,ti.stems_per_bunch
+    ), discarded AS (
+      SELECT source_date,variety,grade_cm,stems_per_bunch,SUM(bunches)::int AS waste_bunches
+      FROM inventory_waste WHERE canceled_at IS NULL
+      GROUP BY source_date,variety,grade_cm,stems_per_bunch
     )
     SELECT source.source_date,source.variety,source.grade_cm,source.stems_per_bunch,source.updated_at,
-           GREATEST(source.source_bunches-COALESCE(used.used_bunches,0)-CASE WHEN source.grade_cm='BAJAS' THEN COALESCE(transferred.transferred_bunches,0) ELSE 0 END+COALESCE(adjusted.delta_bunches,0),0)::int AS bunches,
-           GREATEST(source.source_stems-COALESCE(used.used_stems,0)-CASE WHEN source.grade_cm='BAJAS' THEN COALESCE(transferred.transferred_bunches,0)*source.stems_per_bunch ELSE 0 END+COALESCE(adjusted.delta_bunches,0)*source.stems_per_bunch,0)::int AS stems
+           GREATEST(source.source_bunches-COALESCE(used.used_bunches,0)-CASE WHEN source.grade_cm='BAJAS' THEN COALESCE(transferred.transferred_bunches,0) ELSE 0 END-COALESCE(discarded.waste_bunches,0)+COALESCE(adjusted.delta_bunches,0),0)::int AS bunches,
+           GREATEST(source.source_stems-COALESCE(used.used_stems,0)-CASE WHEN source.grade_cm='BAJAS' THEN COALESCE(transferred.transferred_bunches,0)*source.stems_per_bunch ELSE 0 END-COALESCE(discarded.waste_bunches,0)*source.stems_per_bunch+COALESCE(adjusted.delta_bunches,0)*source.stems_per_bunch,0)::int AS stems
     FROM source
     LEFT JOIN used USING (source_date,variety,grade_cm,stems_per_bunch)
     LEFT JOIN adjusted USING (source_date,variety,grade_cm,stems_per_bunch)
     LEFT JOIN transferred ON transferred.source_date=source.source_date AND transferred.variety=source.variety AND transferred.stems_per_bunch=source.stems_per_bunch AND source.grade_cm='BAJAS'
-    WHERE $3::boolean OR source.source_bunches-COALESCE(used.used_bunches,0)-CASE WHEN source.grade_cm='BAJAS' THEN COALESCE(transferred.transferred_bunches,0) ELSE 0 END+COALESCE(adjusted.delta_bunches,0) > 0
+    LEFT JOIN discarded ON discarded.source_date=source.source_date AND discarded.variety=source.variety AND discarded.grade_cm=source.grade_cm AND discarded.stems_per_bunch=source.stems_per_bunch
+    WHERE $3::boolean OR source.source_bunches-COALESCE(used.used_bunches,0)-CASE WHEN source.grade_cm='BAJAS' THEN COALESCE(transferred.transferred_bunches,0) ELSE 0 END-COALESCE(discarded.waste_bunches,0)+COALESCE(adjusted.delta_bunches,0) > 0
     ORDER BY source.source_date DESC,source.variety,source.grade_cm,source.stems_per_bunch
   `, [allowedGrades, inventoryStartDate(), includeZero]);
   return result.rows.map(row => {
@@ -375,7 +398,8 @@ async function reconcileInventory(input) {
     const used = await client.query(`SELECT COALESCE(SUM(ri.bunches),0)::int AS bunches FROM remission_items ri JOIN remissions r ON r.id=ri.remission_id WHERE ri.source_date=$1::date AND ri.variety=$2 AND ri.grade_cm = ANY($3::text[]) AND ri.stems_per_bunch=$4 AND r.status <> 'ANULADA'`, [source.sourceDate, source.variety, source.gradeCm === 'BAJAS' ? ['BAJAS', 'BAJAS GRANEL'] : [source.gradeCm], source.stemsPerBunch]);
     const transferred = source.gradeCm === 'BAJAS' ? await client.query(`SELECT COALESCE(SUM(ti.bunches),0)::int AS bunches FROM export_transfer_items ti JOIN export_transfers t ON t.id=ti.transfer_id WHERE ti.source_date=$1::date AND ti.variety=$2 AND ti.stems_per_bunch=$3 AND t.canceled_at IS NULL`, [source.sourceDate, source.variety, source.stemsPerBunch]) : null;
     const prior = await client.query(`SELECT COALESCE(SUM(delta_bunches),0)::int AS bunches FROM inventory_adjustments WHERE source_date=$1::date AND variety=$2 AND grade_cm=$3 AND stems_per_bunch=$4`, [source.sourceDate, source.variety, source.gradeCm, source.stemsPerBunch]);
-    const current = Number(sourceCount.rows[0].bunches) - Number(used.rows[0].bunches) - Number(transferred?.rows[0].bunches || 0) + Number(prior.rows[0].bunches);
+    const discarded = await client.query(`SELECT COALESCE(SUM(bunches),0)::int AS bunches FROM inventory_waste WHERE source_date=$1::date AND variety=$2 AND grade_cm=$3 AND stems_per_bunch=$4 AND canceled_at IS NULL`, [source.sourceDate, source.variety, source.gradeCm, source.stemsPerBunch]);
+    const current = Number(sourceCount.rows[0].bunches) - Number(used.rows[0].bunches) - Number(transferred?.rows[0].bunches || 0) - Number(discarded.rows[0].bunches) + Number(prior.rows[0].bunches);
     if (current !== expectedBunches) throw new Error('El inventario cambió. Actualice la página antes de conciliar.');
     const deltaBunches = countedBunches - current;
     const saved = await client.query(`INSERT INTO inventory_adjustments (source_date,variety,grade_cm,stems_per_bunch,before_bunches,counted_bunches,delta_bunches,responsible,reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`, [source.sourceDate, source.variety, source.gradeCm, source.stemsPerBunch, current, countedBunches, deltaBunches, responsible, reason]);
@@ -666,7 +690,8 @@ async function createRemission(input) {
         const used = await client.query(`SELECT COALESCE(SUM(ri.bunches),0)::int AS used_bunches FROM remission_items ri JOIN remissions r ON r.id=ri.remission_id WHERE ri.source_date=$1::date AND ri.variety=$2 AND ri.grade_cm = ANY($3::text[]) AND ri.stems_per_bunch=$4 AND r.status <> 'ANULADA'`, [selected.sourceDate, selected.variety, selected.gradeCm === 'BAJAS' ? ['BAJAS', 'BAJAS GRANEL'] : [selected.gradeCm], selected.stemsPerBunch]);
         const transferred = selected.gradeCm === 'BAJAS' ? await client.query(`SELECT COALESCE(SUM(ti.bunches),0)::int AS bunches FROM export_transfer_items ti JOIN export_transfers t ON t.id=ti.transfer_id WHERE ti.source_date=$1::date AND ti.variety=$2 AND ti.stems_per_bunch=$3 AND t.canceled_at IS NULL`, [selected.sourceDate, selected.variety, selected.stemsPerBunch]) : null;
         const adjusted = await client.query(`SELECT COALESCE(SUM(delta_bunches),0)::int AS bunches FROM inventory_adjustments WHERE source_date=$1::date AND variety=$2 AND grade_cm=$3 AND stems_per_bunch=$4`, [selected.sourceDate, selected.variety, selected.gradeCm, selected.stemsPerBunch]);
-        const available = Number(source.rows[0].source_bunches) - Number(used.rows[0].used_bunches) - Number(transferred?.rows[0].bunches || 0) + Number(adjusted.rows[0].bunches) - (selectedInThisRemission.get(requested.key) || 0);
+        const discarded = await client.query(`SELECT COALESCE(SUM(bunches),0)::int AS bunches FROM inventory_waste WHERE source_date=$1::date AND variety=$2 AND grade_cm=$3 AND stems_per_bunch=$4 AND canceled_at IS NULL`, [selected.sourceDate, selected.variety, selected.gradeCm, selected.stemsPerBunch]);
+        const available = Number(source.rows[0].source_bunches) - Number(used.rows[0].used_bunches) - Number(transferred?.rows[0].bunches || 0) - Number(discarded.rows[0].bunches) + Number(adjusted.rows[0].bunches) - (selectedInThisRemission.get(requested.key) || 0);
         if (requested.bunches > available) throw new Error(`Stock insuficiente de ${selected.variety}. Quedan ${Math.max(available, 0)} ramos.`);
         selectedInThisRemission.set(requested.key, (selectedInThisRemission.get(requested.key) || 0) + requested.bunches);
       }
@@ -744,7 +769,8 @@ async function assignRemissionItems(id, input) {
       const used = await client.query(`SELECT COALESCE(SUM(ri.bunches),0)::int AS used_bunches FROM remission_items ri JOIN remissions r ON r.id=ri.remission_id WHERE ri.source_date=$1::date AND ri.variety=$2 AND ri.grade_cm=$3 AND ri.stems_per_bunch=$4 AND r.status <> 'ANULADA'`, [selected.sourceDate, selected.variety, selected.gradeCm, selected.stemsPerBunch]);
       const transferred = selected.gradeCm === 'BAJAS' ? await client.query(`SELECT COALESCE(SUM(ti.bunches),0)::int AS bunches FROM export_transfer_items ti JOIN export_transfers t ON t.id=ti.transfer_id WHERE ti.source_date=$1::date AND ti.variety=$2 AND ti.stems_per_bunch=$3 AND t.canceled_at IS NULL`, [selected.sourceDate, selected.variety, selected.stemsPerBunch]) : null;
       const adjusted = await client.query(`SELECT COALESCE(SUM(delta_bunches),0)::int AS bunches FROM inventory_adjustments WHERE source_date=$1::date AND variety=$2 AND grade_cm=$3 AND stems_per_bunch=$4`, [selected.sourceDate, selected.variety, selected.gradeCm, selected.stemsPerBunch]);
-      const available = Number(source.rows[0].source_bunches) - Number(used.rows[0].used_bunches) - Number(transferred?.rows[0].bunches || 0) + Number(adjusted.rows[0].bunches);
+      const discarded = await client.query(`SELECT COALESCE(SUM(bunches),0)::int AS bunches FROM inventory_waste WHERE source_date=$1::date AND variety=$2 AND grade_cm=$3 AND stems_per_bunch=$4 AND canceled_at IS NULL`, [selected.sourceDate, selected.variety, selected.gradeCm, selected.stemsPerBunch]);
+      const available = Number(source.rows[0].source_bunches) - Number(used.rows[0].used_bunches) - Number(transferred?.rows[0].bunches || 0) - Number(discarded.rows[0].bunches) + Number(adjusted.rows[0].bunches);
       if (requested.bunches > available) throw new Error(`Stock insuficiente de ${selected.variety}. Quedan ${Math.max(available, 0)} ramos.`);
       detailRows.push({ ...selected, bunches: requested.bunches, stems: requested.bunches * selected.stemsPerBunch });
     }
@@ -884,8 +910,9 @@ async function createExportTransfer(input) {
         (SELECT COUNT(*)::int FROM public.scans WHERE ts::date=$1::date AND TRIM(variedad_nombre)=$2 AND UPPER(TRIM(grado_cm))='BAJAS' AND tallos=$3) AS source_bunches,
         (SELECT COALESCE(SUM(ri.bunches),0)::int FROM remission_items ri JOIN remissions r ON r.id=ri.remission_id WHERE ri.source_date=$1::date AND ri.variety=$2 AND ri.grade_cm IN ('BAJAS','BAJAS GRANEL') AND ri.stems_per_bunch=$3 AND r.status <> 'ANULADA') AS used_bunches,
         (SELECT COALESCE(SUM(ti.bunches),0)::int FROM export_transfer_items ti JOIN export_transfers t ON t.id=ti.transfer_id WHERE ti.source_date=$1::date AND ti.variety=$2 AND ti.stems_per_bunch=$3 AND t.canceled_at IS NULL) AS transferred_bunches,
+        (SELECT COALESCE(SUM(bunches),0)::int FROM inventory_waste WHERE source_date=$1::date AND variety=$2 AND grade_cm='BAJAS' AND stems_per_bunch=$3 AND canceled_at IS NULL) AS waste_bunches,
         (SELECT COALESCE(SUM(delta_bunches),0)::int FROM inventory_adjustments WHERE source_date=$1::date AND variety=$2 AND grade_cm='BAJAS' AND stems_per_bunch=$3) AS adjusted_bunches`, [row.date, row.variety, row.stemsPerBunch]);
-      const available = Math.max(0, Number(stock.rows[0].source_bunches) - Number(stock.rows[0].used_bunches) - Number(stock.rows[0].transferred_bunches) + Number(stock.rows[0].adjusted_bunches));
+      const available = Math.max(0, Number(stock.rows[0].source_bunches) - Number(stock.rows[0].used_bunches) - Number(stock.rows[0].transferred_bunches) - Number(stock.rows[0].waste_bunches) + Number(stock.rows[0].adjusted_bunches));
       const use = Math.min(pending, available);
       if (use) { items.push({ sourceDate: row.date, variety: row.variety, stemsPerBunch: row.stemsPerBunch, bunches: use }); pending -= use; }
     }
@@ -911,6 +938,68 @@ async function cancelExportTransfer(id) {
   const result = await pool.query('UPDATE export_transfers SET canceled_at=NOW() WHERE id=$1 AND canceled_at IS NULL RETURNING *', [transferId]);
   if (!result.rows[0]) throw new Error('Traslado no encontrado o ya anulado.');
   return { id: transferId, canceledAt: result.rows[0].canceled_at };
+}
+
+function mapWaste(row) {
+  return { id: Number(row.id), date: row.source_date ? dateOnly(row.source_date) : row.date, variety: row.variety, gradeCm: row.grade_cm ?? row.gradeCm, stemsPerBunch: Number(row.stems_per_bunch ?? row.stemsPerBunch), bunches: Number(row.bunches), stems: Number(row.bunches) * Number(row.stems_per_bunch ?? row.stemsPerBunch), responsible: row.responsible, reason: row.reason, createdAt: row.created_at ?? row.createdAt, canceledAt: row.canceled_at ?? row.canceledAt ?? null, cancellationReason: row.cancellation_reason ?? row.cancellationReason ?? '' };
+}
+
+async function listWaste(limit = 100) {
+  if (!usePostgres) return [...memory.waste].reverse().slice(0, limit).map(mapWaste);
+  const result = await pool.query('SELECT * FROM inventory_waste ORDER BY created_at DESC,id DESC LIMIT $1', [limit]);
+  return result.rows.map(mapWaste);
+}
+
+async function createWaste(input) {
+  const key = String(input.key || '');
+  const source = decodeInventoryKey(key);
+  const bunches = Number(input.bunches);
+  const responsible = String(input.responsible || '').trim();
+  const reason = String(input.reason || '').trim();
+  if (!Number.isSafeInteger(bunches) || bunches < 1) throw new Error('Ingrese una cantidad válida de ramos para desechar.');
+  if (!responsible || !reason) throw new Error('Responsable y motivo son obligatorios.');
+  if (!usePostgres) {
+    const stock = memory.inventory.find(row => inventoryKey({ ...row, date: dateOnly(row.date ?? row.updatedAt), gradeCm: row.gradeCm || 'NACIONAL' }) === key);
+    if (!stock || stock.bunches < bunches) throw new Error('No hay suficientes ramos disponibles para desechar.');
+    stock.bunches -= bunches; stock.stems -= bunches * source.stemsPerBunch;
+    const waste = { id: memory.nextWasteId++, date: source.sourceDate, variety: source.variety, gradeCm: source.gradeCm, stemsPerBunch: source.stemsPerBunch, bunches, responsible, reason, createdAt: new Date().toISOString(), canceledAt: null, cancellationReason: '' };
+    memory.waste.push(waste); persistMemory(); return mapWaste(waste);
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [key]);
+    const stock = await client.query(`SELECT
+      (SELECT COUNT(*)::int FROM public.scans WHERE ts::date=$1::date AND TRIM(variedad_nombre)=$2 AND UPPER(TRIM(grado_cm))=$3 AND tallos=$4) AS source_bunches,
+      (SELECT COALESCE(SUM(ri.bunches),0)::int FROM remission_items ri JOIN remissions r ON r.id=ri.remission_id WHERE ri.source_date=$1::date AND ri.variety=$2 AND ri.grade_cm = ANY($5::text[]) AND ri.stems_per_bunch=$4 AND r.status <> 'ANULADA') AS used_bunches,
+      (SELECT COALESCE(SUM(ti.bunches),0)::int FROM export_transfer_items ti JOIN export_transfers t ON t.id=ti.transfer_id WHERE ti.source_date=$1::date AND ti.variety=$2 AND ti.stems_per_bunch=$4 AND t.canceled_at IS NULL) AS transferred_bunches,
+      (SELECT COALESCE(SUM(delta_bunches),0)::int FROM inventory_adjustments WHERE source_date=$1::date AND variety=$2 AND grade_cm=$3 AND stems_per_bunch=$4) AS adjusted_bunches,
+      (SELECT COALESCE(SUM(bunches),0)::int FROM inventory_waste WHERE source_date=$1::date AND variety=$2 AND grade_cm=$3 AND stems_per_bunch=$4 AND canceled_at IS NULL) AS waste_bunches`,
+    [source.sourceDate, source.variety, source.gradeCm, source.stemsPerBunch, source.gradeCm === 'BAJAS' ? ['BAJAS', 'BAJAS GRANEL'] : [source.gradeCm]]);
+    const current = Number(stock.rows[0].source_bunches) - Number(stock.rows[0].used_bunches) - (source.gradeCm === 'BAJAS' ? Number(stock.rows[0].transferred_bunches) : 0) + Number(stock.rows[0].adjusted_bunches) - Number(stock.rows[0].waste_bunches);
+    if (bunches > current) throw new Error(`No hay suficientes ramos para desechar. Disponibles: ${Math.max(current, 0)}.`);
+    const result = await client.query('INSERT INTO inventory_waste (source_date,variety,grade_cm,stems_per_bunch,bunches,responsible,reason) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *', [source.sourceDate, source.variety, source.gradeCm, source.stemsPerBunch, bunches, responsible, reason]);
+    await client.query('COMMIT');
+    return mapWaste(result.rows[0]);
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
+}
+
+async function cancelWaste(id, input) {
+  const wasteId = Number(id);
+  const reason = String(input.reason || '').trim();
+  if (!Number.isSafeInteger(wasteId) || wasteId < 1) throw new Error('Desecho no válido.');
+  if (!reason) throw new Error('Indique el motivo de la anulación.');
+  if (!usePostgres) {
+    const waste = memory.waste.find(row => row.id === wasteId);
+    if (!waste || waste.canceledAt) throw new Error('Desecho no encontrado o ya anulado.');
+    const stock = memory.inventory.find(row => inventoryKey({ ...row, date: dateOnly(row.date ?? row.updatedAt), gradeCm: row.gradeCm || 'NACIONAL' }) === inventoryKey({ sourceDate: waste.date, variety: waste.variety, gradeCm: waste.gradeCm, stemsPerBunch: waste.stemsPerBunch }));
+    if (stock) { stock.bunches += waste.bunches; stock.stems += waste.bunches * waste.stemsPerBunch; }
+    waste.canceledAt = new Date().toISOString(); waste.cancellationReason = reason; persistMemory(); return mapWaste(waste);
+  }
+  const result = await pool.query('UPDATE inventory_waste SET canceled_at=NOW(),cancellation_reason=$2 WHERE id=$1 AND canceled_at IS NULL RETURNING *', [wasteId, reason]);
+  if (!result.rows[0]) throw new Error('Desecho no encontrado o ya anulado.');
+  return mapWaste(result.rows[0]);
 }
 
 async function listRemissions(limit = 100) {
@@ -997,14 +1086,22 @@ async function inventorySnapshot(cutoffDate) {
       FROM inventory_adjustments
       WHERE (created_at AT TIME ZONE $4)::date < $2::date
       GROUP BY source_date,variety,grade_cm,stems_per_bunch
+    ), discarded AS (
+      SELECT source_date,variety,grade_cm,stems_per_bunch,SUM(bunches)::int AS bunches
+      FROM inventory_waste
+      WHERE (created_at AT TIME ZONE $4)::date < $2::date
+        AND (canceled_at IS NULL OR (canceled_at AT TIME ZONE $4)::date >= $2::date)
+      GROUP BY source_date,variety,grade_cm,stems_per_bunch
     )
     SELECT source.source_date,source.variety,source.grade_cm,source.stems_per_bunch,
            GREATEST(source.source_bunches-COALESCE(used.bunches,0)
              -CASE WHEN source.grade_cm='BAJAS' THEN COALESCE(transferred.bunches,0) ELSE 0 END
+             -COALESCE(discarded.bunches,0)
              +COALESCE(adjusted.bunches,0),0)::int AS bunches
     FROM source
     LEFT JOIN used USING (source_date,variety,grade_cm,stems_per_bunch)
     LEFT JOIN adjusted USING (source_date,variety,grade_cm,stems_per_bunch)
+    LEFT JOIN discarded ON discarded.source_date=source.source_date AND discarded.variety=source.variety AND discarded.grade_cm=source.grade_cm AND discarded.stems_per_bunch=source.stems_per_bunch
     LEFT JOIN transferred ON transferred.source_date=source.source_date AND transferred.variety=source.variety
       AND transferred.stems_per_bunch=source.stems_per_bunch AND source.grade_cm='BAJAS'
     ORDER BY source.variety,source.grade_cm,source.source_date,source.stems_per_bunch
@@ -1023,4 +1120,4 @@ async function inventoryReport(from, to) {
   return { from: start, to: end, opening, closing };
 }
 
-module.exports = { init, listInventory, listInventoryAdjustments, reconcileInventory, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, assignRemissionItems, setRemissionPrices, cancelRemission, renumberRemissions, listExportTransfers, createExportTransfer, cancelExportTransfer, listRemissions, getRemission, dashboard, salesReport, inventoryReport, usePostgres };
+module.exports = { init, listInventory, listInventoryAdjustments, reconcileInventory, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, assignRemissionItems, setRemissionPrices, cancelRemission, renumberRemissions, listExportTransfers, createExportTransfer, cancelExportTransfer, listWaste, createWaste, cancelWaste, listRemissions, getRemission, dashboard, salesReport, inventoryReport, usePostgres };

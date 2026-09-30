@@ -1,5 +1,5 @@
 const varieties = ['FREEDOM', 'PINK FLOYD', 'MONDIAL', 'HUMMER', 'MOMENTUM', 'CORAL REEF', 'QUICK SAND', 'HILUX', 'CANDLELIGHT', 'DEEP PURPLE', 'SUMMERSAND', 'STAR PLATINUM', 'SHIMMER', 'PINK OHARA', 'WHITE OHARA', 'PINK MONDIAL', 'BLESSING', 'PINK AMARETO', 'TIFFANY', 'YELLOW BIKINI', 'QUEEN BERRY', 'MOODY BLUE', 'SWAN', 'HIGH MAGIC', 'EXPLORER', 'DANCING RED', 'VENDELA'];
-const state = { inventory: [], inventoryFingerprint: '', inventoryRequestVersion: 0, inventoryRefreshBusy: false, refreshVersion: 0, reconciliationSources: [], adjustments: [], remissions: [], prices: [], transfers: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], inventoryReport: null, reportRange: '', stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
+const state = { inventory: [], inventoryFingerprint: '', inventoryRequestVersion: 0, inventoryRefreshBusy: false, refreshVersion: 0, reconciliationSources: [], adjustments: [], remissions: [], prices: [], transfers: [], waste: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], inventoryReport: null, reportRange: '', stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const money = value => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', currencyDisplay: 'code', maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -34,13 +34,14 @@ async function refreshAll() {
   const version = ++state.refreshVersion;
   const inventoryVersion = ++state.inventoryRequestVersion;
   const fresh = { cache: 'no-store' };
-  const [dashboard, config, prices, transfers, reconciliation] = await Promise.all([api('/api/dashboard', fresh), api('/api/config', fresh), api('/api/price-lists', fresh), api('/api/export-transfers', fresh), api('/api/inventory/reconciliation', fresh)]);
+  const [dashboard, config, prices, transfers, reconciliation, waste] = await Promise.all([api('/api/dashboard', fresh), api('/api/config', fresh), api('/api/price-lists', fresh), api('/api/export-transfers', fresh), api('/api/inventory/reconciliation', fresh), api('/api/inventory/waste', fresh)]);
   if (version !== state.refreshVersion) return;
   if (inventoryVersion === state.inventoryRequestVersion) applyInventory(dashboard.inventory);
   state.remissions = dashboard.remissions;
   state.config = config;
   state.prices = normalizePriceList(prices);
   state.transfers = transfers;
+  state.waste = waste;
   state.reconciliationSources = reconciliation.sources;
   state.adjustments = reconciliation.adjustments;
   state.totals = dashboard.totals;
@@ -48,6 +49,7 @@ async function refreshAll() {
   renderInventory();
   renderReconciliation();
   renderTransfers();
+  renderWaste();
   renderHistory();
   renderPrices();
 }
@@ -146,6 +148,15 @@ function renderTransfers() {
   select.value = selected;
   $('#transfer-history-body').innerHTML = state.transfers.map(row => `<tr><td>${dateTime(row.createdAt)}</td><td><strong>${escapeHtml(row.variety)}</strong></td><td>${number(row.bunches)}</td><td>${number(row.stems)}</td><td>${escapeHtml(row.responsible)}</td><td>${escapeHtml(row.reason)}</td><td>${row.canceledAt ? '<span class="workflow-status workflow-status--canceled">Anulado</span>' : '<span class="workflow-status workflow-status--done">Registrado</span>'}</td><td>${row.canceledAt ? '' : `<button class="small-button small-button--danger" type="button" data-cancel-transfer="${row.id}">Anular</button>`}</td></tr>`).join('');
   $('#transfer-history-empty').classList.toggle('is-hidden', state.transfers.length > 0);
+}
+
+function renderWaste() {
+  const select = $('#waste-source');
+  const selected = select.value;
+  select.innerHTML = '<option value="">Seleccione un lote</option>' + state.inventory.filter(row => row.bunches > 0).map(row => `<option value="${escapeHtml(row.key)}">${escapeHtml(inventoryDate(row.date))} · ${escapeHtml(row.variety)} · ${escapeHtml(row.gradeCm)} · ${number(row.stemsPerBunch)} tallos/ramo · ${number(row.bunches)} ramos</option>`).join('');
+  select.value = selected;
+  $('#waste-history-body').innerHTML = state.waste.map(row => `<tr><td>${dateTime(row.createdAt)}</td><td><strong>${escapeHtml(row.variety)}</strong><br>${inventoryDate(row.date)} · ${escapeHtml(row.gradeCm)} · ${number(row.stemsPerBunch)} tallos/ramo</td><td>${number(row.bunches)}</td><td>${number(row.stems)}</td><td>${escapeHtml(row.responsible)}</td><td>${escapeHtml(row.reason)}${row.cancellationReason ? `<br><small>Anulación: ${escapeHtml(row.cancellationReason)}</small>` : ''}</td><td>${row.canceledAt ? '<span class="workflow-status workflow-status--canceled">Anulado</span>' : '<span class="workflow-status workflow-status--done">Descontado</span>'}</td><td>${row.canceledAt ? '' : `<button class="small-button small-button--danger" type="button" data-cancel-waste="${row.id}">Anular</button>`}</td></tr>`).join('');
+  $('#waste-history-empty').classList.toggle('is-hidden', state.waste.length > 0);
 }
 
 function renderVarietyOptions() {
@@ -546,6 +557,22 @@ $('#export-transfer-form').addEventListener('submit', async event => {
   } catch (requestError) { error.textContent = requestError.message; }
   finally { button.disabled = false; }
 });
+$('#waste-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = event.submitter;
+  const error = $('#waste-error');
+  error.textContent = '';
+  if (!window.confirm('¿Confirmar el desecho? Los ramos se descontarán del inventario.')) return;
+  button.disabled = true;
+  try {
+    await api('/api/inventory/waste', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) });
+    form.reset();
+    await refreshAll();
+    toast('Desecho registrado y descontado del inventario.');
+  } catch (requestError) { error.textContent = requestError.message; }
+  finally { button.disabled = false; }
+});
 $('#history-search').addEventListener('input', renderHistory);
 function setDateFilter(value) {
   state.selectedDate = value;
@@ -581,6 +608,7 @@ document.addEventListener('click', async event => {
   const remissionButton = event.target.closest('[data-remission-id]');
   const cancelButton = event.target.closest('[data-cancel-remission]');
   const cancelTransferButton = event.target.closest('[data-cancel-transfer]');
+  const cancelWasteButton = event.target.closest('[data-cancel-waste]');
   const removeButton = event.target.closest('[data-remove-line]');
   const removePriceDraft = event.target.closest('[data-remove-price-draft]');
   const editPriceClient = event.target.closest('[data-edit-price-client]');
@@ -600,6 +628,17 @@ document.addEventListener('click', async event => {
       await refreshAll();
       toast('Traslado anulado. Los ramos volvieron a Bajas.');
     } catch (requestError) { toast(requestError.message); cancelTransferButton.disabled = false; }
+  }
+  if (cancelWasteButton) {
+    const reason = window.prompt('Motivo para anular el desecho y devolver los ramos al inventario:');
+    if (reason === null) return;
+    if (!reason.trim()) return toast('Indique el motivo de la anulación.');
+    cancelWasteButton.disabled = true;
+    try {
+      await api(`/api/inventory/waste/${cancelWasteButton.dataset.cancelWaste}/cancel`, { method: 'PUT', body: JSON.stringify({ reason: reason.trim() }) });
+      await refreshAll();
+      toast('Desecho anulado. Los ramos volvieron al inventario.');
+    } catch (requestError) { toast(requestError.message); cancelWasteButton.disabled = false; }
   }
   if (removeButton) { state.lines = state.lines.filter(row => row.key !== removeButton.dataset.removeLine); $('#remission-error').textContent = ''; renderLines(); }
   if (removePriceDraft) { state.priceDrafts.splice(Number(removePriceDraft.dataset.removePriceDraft), 1); renderPriceDrafts(); }
