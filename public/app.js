@@ -1,5 +1,5 @@
 const varieties = ['FREEDOM', 'PINK FLOYD', 'MONDIAL', 'HUMMER', 'MOMENTUM', 'CORAL REEF', 'QUICK SAND', 'HILUX', 'CANDLELIGHT', 'DEEP PURPLE', 'SUMMERSAND', 'STAR PLATINUM', 'SHIMMER', 'PINK OHARA', 'WHITE OHARA', 'PINK MONDIAL', 'BLESSING', 'PINK AMARETO', 'TIFFANY', 'YELLOW BIKINI', 'QUEEN BERRY', 'MOODY BLUE', 'SWAN', 'HIGH MAGIC', 'EXPLORER', 'DANCING RED', 'VENDELA'];
-const state = { inventory: [], inventoryFingerprint: '', inventoryRequestVersion: 0, inventoryRefreshBusy: false, refreshVersion: 0, reconciliationSources: [], adjustments: [], remissions: [], prices: [], transfers: [], waste: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], inventoryReport: null, reportRange: '', stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
+const state = { inventory: [], inventoryFingerprint: '', inventoryRequestVersion: 0, inventoryRefreshBusy: false, refreshVersion: 0, reconciliationSources: [], adjustments: [], remissions: [], prices: [], transfers: [], waste: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], wasteReport: [], inventoryReport: null, reportRange: '', stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const money = value => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', currencyDisplay: 'code', maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -397,15 +397,23 @@ function renderInventoryReport() {
   if (!groups.size) $('#report-inventory-empty').innerHTML = '<strong>Sin inventario</strong><span>No hay flor nacional registrada en las fechas elegidas.</span>';
 }
 
+function renderWasteReport() {
+  const rows = state.wasteReport;
+  $('#report-waste-bunches').textContent = `${number(rows.reduce((sum, row) => sum + Number(row.bunches || 0), 0))} ramos`;
+  $('#report-waste-stems').textContent = `${number(rows.reduce((sum, row) => sum + Number(row.stems || 0), 0))} tallos`;
+  $('#report-waste-body').innerHTML = rows.map(row => `<tr><td>${dateTime(row.createdAt)}</td><td><strong>${escapeHtml(row.variety)}</strong></td><td><span class="grade-chip">${escapeHtml(row.gradeCm)}</span></td><td>${inventoryDate(row.date)} · ${number(row.stemsPerBunch)} tallos/ramo</td><td class="quantity">${number(row.bunches)}</td><td class="quantity">${number(row.stems)}</td><td>${escapeHtml(row.responsible)}</td><td>${escapeHtml(row.reason)}</td></tr>`).join('');
+  $('#report-waste-empty').classList.toggle('is-hidden', rows.length > 0);
+}
+
 async function generateReport() {
   const from = $('#report-from').value; const to = $('#report-to').value;
   if (!from || !to) return toast('Seleccione las dos fechas para generar el informe.');
   if (from > to) return toast('La fecha inicial no puede ser posterior a la final.');
   try {
     const query = `from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
-    const [rows, inventory] = await Promise.all([api(`/api/reports/sales?${query}`), api(`/api/reports/inventory?${query}`)]);
-    state.reportRows = rows; state.inventoryReport = inventory; state.reportRange = `${from}|${to}`;
-    renderReport(); renderInventoryReport();
+    const [rows, inventory, waste] = await Promise.all([api(`/api/reports/sales?${query}`), api(`/api/reports/inventory?${query}`), api(`/api/reports/waste?${query}`)]);
+    state.reportRows = rows; state.inventoryReport = inventory; state.wasteReport = waste; state.reportRange = `${from}|${to}`;
+    renderReport(); renderInventoryReport(); renderWasteReport();
   }
   catch (error) { toast(error.message); }
 }

@@ -1055,6 +1055,15 @@ async function salesReport(from, to) {
   return result.rows.map(row => ({ remissionNumber: row.remission_number, createdAt: row.created_at, clientName: row.client_name, variety: row.variety, gradeCm: row.grade_cm, bunches: Number(row.bunches), stems: Number(row.stems), unitPriceBunch: Number(row.unit_price_bunch), unitPriceStem: Number(row.unit_price_stem), subtotal: Number(row.subtotal), isDonation: row.is_donation }));
 }
 
+async function wasteReport(from, to) {
+  const start = String(from || '').slice(0, 10);
+  const end = String(to || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || start > end) throw new Error('Seleccione un rango de fechas válido.');
+  if (!usePostgres) return memory.waste.filter(row => !row.canceledAt && dateOnly(row.createdAt) >= start && dateOnly(row.createdAt) <= end).map(mapWaste);
+  const result = await pool.query(`SELECT * FROM inventory_waste WHERE canceled_at IS NULL AND (created_at AT TIME ZONE $3)::date BETWEEN $1::date AND $2::date ORDER BY created_at DESC,id DESC`, [start, end, businessTimeZone]);
+  return result.rows.map(mapWaste);
+}
+
 async function inventorySnapshot(cutoffDate) {
   if (!usePostgres) throw new Error('El informe histórico de inventario requiere PostgreSQL.');
   const result = await pool.query(`
@@ -1120,4 +1129,4 @@ async function inventoryReport(from, to) {
   return { from: start, to: end, opening, closing };
 }
 
-module.exports = { init, listInventory, listInventoryAdjustments, reconcileInventory, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, assignRemissionItems, setRemissionPrices, cancelRemission, renumberRemissions, listExportTransfers, createExportTransfer, cancelExportTransfer, listWaste, createWaste, cancelWaste, listRemissions, getRemission, dashboard, salesReport, inventoryReport, usePostgres };
+module.exports = { init, listInventory, listInventoryAdjustments, reconcileInventory, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, assignRemissionItems, setRemissionPrices, cancelRemission, renumberRemissions, listExportTransfers, createExportTransfer, cancelExportTransfer, listWaste, createWaste, cancelWaste, listRemissions, getRemission, dashboard, salesReport, wasteReport, inventoryReport, usePostgres };
