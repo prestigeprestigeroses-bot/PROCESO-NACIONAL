@@ -1,5 +1,5 @@
 const varieties = ['FREEDOM', 'PINK FLOYD', 'MONDIAL', 'HUMMER', 'MOMENTUM', 'CORAL REEF', 'QUICK SAND', 'HILUX', 'CANDLELIGHT', 'DEEP PURPLE', 'SUMMERSAND', 'STAR PLATINUM', 'SHIMMER', 'PINK OHARA', 'WHITE OHARA', 'PINK MONDIAL', 'BLESSING', 'PINK AMARETO', 'TIFFANY', 'YELLOW BIKINI', 'QUEEN BERRY', 'MOODY BLUE', 'SWAN', 'HIGH MAGIC', 'EXPLORER', 'DANCING RED', 'VENDELA'];
-const state = { inventory: [], inventoryFingerprint: '', inventoryRequestVersion: 0, inventoryRefreshBusy: false, refreshVersion: 0, reconciliationSources: [], adjustments: [], remissions: [], prices: [], transfers: [], waste: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], wasteReport: [], inventoryReport: null, reportRange: '', stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
+const state = { inventory: [], inventoryFingerprint: '', inventoryRefreshPromise: null, inventoryLastSyncedAt: null, inventorySyncError: '', refreshVersion: 0, reconciliationSources: [], adjustments: [], remissions: [], prices: [], transfers: [], waste: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], wasteReport: [], inventoryReport: null, reportRange: '', stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const money = value => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', currencyDisplay: 'code', maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -32,26 +32,45 @@ async function showApp() {
 
 async function refreshAll() {
   const version = ++state.refreshVersion;
-  const inventoryVersion = ++state.inventoryRequestVersion;
   const fresh = { cache: 'no-store' };
-  const [dashboard, config, prices, transfers, reconciliation, waste] = await Promise.all([api('/api/dashboard', fresh), api('/api/config', fresh), api('/api/price-lists', fresh), api('/api/export-transfers', fresh), api('/api/inventory/reconciliation', fresh), api('/api/inventory/waste', fresh)]);
+  const inventoryRefresh = refreshInventory().catch(() => false);
+  const results = await Promise.allSettled([api('/api/dashboard', fresh), api('/api/config', fresh), api('/api/price-lists', fresh), api('/api/export-transfers', fresh), api('/api/inventory/reconciliation', fresh), api('/api/inventory/waste', fresh)]);
+  await inventoryRefresh;
   if (version !== state.refreshVersion) return;
-  if (inventoryVersion === state.inventoryRequestVersion) applyInventory(dashboard.inventory);
-  state.remissions = dashboard.remissions;
-  state.config = config;
-  state.prices = normalizePriceList(prices);
-  state.transfers = transfers;
-  state.waste = waste;
-  state.reconciliationSources = reconciliation.sources;
-  state.adjustments = reconciliation.adjustments;
-  state.totals = dashboard.totals;
-  renderDashboard(dashboard.totals);
-  renderInventory();
-  renderReconciliation();
-  renderTransfers();
-  renderWaste();
-  renderHistory();
-  renderPrices();
+  const [dashboard, config, prices, transfers, reconciliation, waste] = results;
+  if (dashboard.status === 'fulfilled') { state.remissions = dashboard.value.remissions; state.totals = dashboard.value.totals; renderDashboard(); renderHistory(); }
+  if (config.status === 'fulfilled') state.config = config.value;
+  if (prices.status === 'fulfilled') { state.prices = normalizePriceList(prices.value); renderPrices(); }
+  if (transfers.status === 'fulfilled') { state.transfers = transfers.value; renderTransfers(); }
+  if (reconciliation.status === 'fulfilled') { state.reconciliationSources = reconciliation.value.sources; state.adjustments = reconciliation.value.adjustments; renderReconciliation(); }
+  if (waste.status === 'fulfilled') { state.waste = waste.value; renderWaste(); }
+}
+
+function renderInventorySyncStatus() {
+  const time = state.inventoryLastSyncedAt ? new Intl.DateTimeFormat('es-CO', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(state.inventoryLastSyncedAt) : null;
+  const message = state.inventorySyncError ? `No se pudo actualizar el inventario. ${time ? `Última actualización correcta: ${time}.` : 'No hay datos confirmados.'} Se reintentará automáticamente.` : time ? `Inventario actualizado a las ${time}.` : 'Consultando inventario...';
+  for (const element of [$('#inventory-sync-status'), $('#remission-sync-status')]) { element.textContent = message; element.classList.toggle('is-error', Boolean(state.inventorySyncError)); }
+}
+
+async function refreshInventory() {
+  if (state.inventoryRefreshPromise) return state.inventoryRefreshPromise;
+  const operation = (async () => {
+    try {
+      const rows = await api('/api/inventory', { cache: 'no-store' });
+      const changed = applyInventory(rows);
+      state.inventoryLastSyncedAt = new Date();
+      state.inventorySyncError = '';
+      renderInventorySyncStatus();
+      renderDashboard(); renderInventory(); renderReconciliation(); renderTransfers(); renderWaste();
+      return changed;
+    } catch (error) {
+      state.inventorySyncError = error.message;
+      renderInventorySyncStatus();
+      throw error;
+    }
+  })();
+  state.inventoryRefreshPromise = operation;
+  try { return await operation; } finally { state.inventoryRefreshPromise = null; }
 }
 
 function applyInventory(rows) {
@@ -174,19 +193,14 @@ function renderVarietyOptions() {
 }
 
 async function refreshRemissionInventory(showMessage = false) {
-  if (state.inventoryRefreshBusy) return;
-  state.inventoryRefreshBusy = true;
-  const inventoryVersion = ++state.inventoryRequestVersion;
   const button = $('#refresh-remission-inventory');
   button.disabled = true;
   try {
-    const rows = await api('/api/inventory', { cache: 'no-store' });
-    const changed = inventoryVersion === state.inventoryRequestVersion && applyInventory(rows);
+    const changed = await refreshInventory();
     if (showMessage) toast(changed ? 'Aparecieron nuevas existencias en la lista de variedades.' : 'Inventario al día; la remisión en curso se conserva.');
   } catch (error) {
     if (showMessage) toast(error.message);
   } finally {
-    state.inventoryRefreshBusy = false;
     button.disabled = false;
   }
 }
@@ -901,14 +915,19 @@ $('#print-document').addEventListener('click', () => {
 setInterval(async () => {
   const appVisible = !$('#app-shell').classList.contains('is-hidden');
   if (!appVisible) return;
-  try {
-    await refreshAll();
-    if (state.activeView === 'history') await loadFullHistory(true);
-    if (state.activeView === 'reports' && state.reportsUnlocked && $('#report-from').value && $('#report-to').value) {
-      await generateReport();
-    }
-  } catch { /* La siguiente sincronización vuelve a intentarlo. */ }
+  await refreshAll();
+  if (state.activeView === 'history') await loadFullHistory(true);
+  if (state.activeView === 'reports' && state.reportsUnlocked && $('#report-from').value && $('#report-to').value) await generateReport();
 }, 10000);
+
+let lastResumeRefresh = 0;
+function refreshWhenReturning() {
+  if (document.visibilityState !== 'visible' || $('#app-shell').classList.contains('is-hidden') || Date.now() - lastResumeRefresh < 2000) return;
+  lastResumeRefresh = Date.now();
+  refreshAll();
+}
+document.addEventListener('visibilitychange', refreshWhenReturning);
+window.addEventListener('focus', refreshWhenReturning);
 
 setInterval(() => {
   if (!$('#app-shell').classList.contains('is-hidden') && state.activeView === 'new-remission' && document.visibilityState === 'visible') {
