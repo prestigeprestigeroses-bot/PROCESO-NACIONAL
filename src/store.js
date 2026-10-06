@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 const { Pool } = require('pg');
 
 const usePostgres = Boolean(process.env.DATABASE_URL);
@@ -190,7 +191,8 @@ async function init() {
       reason TEXT NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       canceled_at TIMESTAMPTZ,
-      cancellation_reason TEXT
+      cancellation_reason TEXT,
+      batch_id UUID
     );
     CREATE TABLE IF NOT EXISTS inventory_adjustments (
       id BIGSERIAL PRIMARY KEY,
@@ -219,6 +221,7 @@ async function init() {
     ALTER TABLE remission_items ADD COLUMN IF NOT EXISTS grade_cm VARCHAR(40);
     ALTER TABLE remission_items ADD COLUMN IF NOT EXISTS stems_per_bunch INTEGER;
     ALTER TABLE remission_items ADD COLUMN IF NOT EXISTS is_donation BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE inventory_waste ADD COLUMN IF NOT EXISTS batch_id UUID;
     ALTER TABLE remissions ADD COLUMN IF NOT EXISTS delivered_by VARCHAR(160) NOT NULL DEFAULT '';
     ALTER TABLE remissions ADD COLUMN IF NOT EXISTS status VARCHAR(40) NOT NULL DEFAULT 'FINALIZADA';
     ALTER TABLE remissions ADD COLUMN IF NOT EXISTS requested_bunches INTEGER NOT NULL DEFAULT 0;
@@ -941,7 +944,7 @@ async function cancelExportTransfer(id) {
 }
 
 function mapWaste(row) {
-  return { id: Number(row.id), date: row.source_date ? dateOnly(row.source_date) : row.date, variety: row.variety, gradeCm: row.grade_cm ?? row.gradeCm, stemsPerBunch: Number(row.stems_per_bunch ?? row.stemsPerBunch), bunches: Number(row.bunches), stems: Number(row.bunches) * Number(row.stems_per_bunch ?? row.stemsPerBunch), responsible: row.responsible, reason: row.reason, createdAt: row.created_at ?? row.createdAt, canceledAt: row.canceled_at ?? row.canceledAt ?? null, cancellationReason: row.cancellation_reason ?? row.cancellationReason ?? '' };
+  return { id: Number(row.id), date: row.source_date ? dateOnly(row.source_date) : row.date, variety: row.variety, gradeCm: row.grade_cm ?? row.gradeCm, stemsPerBunch: Number(row.stems_per_bunch ?? row.stemsPerBunch), bunches: Number(row.bunches), stems: Number(row.bunches) * Number(row.stems_per_bunch ?? row.stemsPerBunch), responsible: row.responsible, reason: row.reason, createdAt: row.created_at ?? row.createdAt, canceledAt: row.canceled_at ?? row.canceledAt ?? null, cancellationReason: row.cancellation_reason ?? row.cancellationReason ?? '', batchId: row.batch_id ?? row.batchId ?? null };
 }
 
 async function listWaste(limit = 100) {
@@ -951,6 +954,7 @@ async function listWaste(limit = 100) {
 }
 
 async function createWaste(input) {
+  if (input.group) return createGroupedWaste(input);
   const key = String(input.key || '');
   const source = decodeInventoryKey(key);
   const bunches = Number(input.bunches);
@@ -985,6 +989,62 @@ async function createWaste(input) {
   finally { client.release(); }
 }
 
+async function createGroupedWaste(input) {
+  let group;
+  try { group = JSON.parse(String(input.group || '')); } catch { throw new Error('Seleccione una variedad y grado válidos.'); }
+  if (!Array.isArray(group) || group.length !== 2) throw new Error('Seleccione una variedad y grado válidos.');
+  const [variety, gradeCm] = group.map(value => String(value || '').trim());
+  const bunches = Number(input.bunches);
+  const responsible = String(input.responsible || '').trim();
+  const reason = String(input.reason || '').trim();
+  if (!variety || !allowedGrades.includes(gradeCm)) throw new Error('Seleccione una variedad y grado válidos.');
+  if (!Number.isSafeInteger(bunches) || bunches < 1) throw new Error('Ingrese una cantidad válida de ramos para desechar.');
+  if (!responsible || !reason) throw new Error('Responsable y motivo son obligatorios.');
+  const candidates = (await listInventory()).filter(row => normalizedText(row.variety) === normalizedText(variety) && row.gradeCm === gradeCm).sort((a, b) => a.date.localeCompare(b.date) || a.stemsPerBunch - b.stemsPerBunch);
+  const batchId = randomUUID();
+  if (!usePostgres) {
+    const available = candidates.reduce((sum, row) => sum + row.bunches, 0);
+    if (bunches > available) throw new Error(`No hay suficientes ramos para desechar. Disponibles: ${available}.`);
+    let pending = bunches;
+    const result = [];
+    for (const row of candidates) {
+      if (!pending) break;
+      const stock = memory.inventory.find(item => inventoryKey({ ...item, date: dateOnly(item.date ?? item.updatedAt), gradeCm: item.gradeCm || 'NACIONAL' }) === row.key);
+      const used = Math.min(pending, stock.bunches);
+      if (!used) continue;
+      stock.bunches -= used; stock.stems -= used * row.stemsPerBunch; pending -= used;
+      const waste = { id: memory.nextWasteId++, date: row.date, variety: row.variety, gradeCm, stemsPerBunch: row.stemsPerBunch, bunches: used, responsible, reason, createdAt: new Date().toISOString(), canceledAt: null, cancellationReason: '', batchId };
+      memory.waste.push(waste); result.push(mapWaste(waste));
+    }
+    persistMemory(); return result;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    let pending = bunches;
+    const result = [];
+    for (const row of candidates) {
+      if (!pending) break;
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [row.key]);
+      const stock = await client.query(`SELECT
+        (SELECT COUNT(*)::int FROM public.scans WHERE ts::date=$1::date AND TRIM(variedad_nombre)=$2 AND UPPER(TRIM(grado_cm))=$3 AND tallos=$4) AS source_bunches,
+        (SELECT COALESCE(SUM(ri.bunches),0)::int FROM remission_items ri JOIN remissions r ON r.id=ri.remission_id WHERE ri.source_date=$1::date AND ri.variety=$2 AND ri.grade_cm = ANY($5::text[]) AND ri.stems_per_bunch=$4 AND r.status <> 'ANULADA') AS used_bunches,
+        (SELECT COALESCE(SUM(ti.bunches),0)::int FROM export_transfer_items ti JOIN export_transfers t ON t.id=ti.transfer_id WHERE ti.source_date=$1::date AND ti.variety=$2 AND ti.stems_per_bunch=$4 AND t.canceled_at IS NULL) AS transferred_bunches,
+        (SELECT COALESCE(SUM(delta_bunches),0)::int FROM inventory_adjustments WHERE source_date=$1::date AND variety=$2 AND grade_cm=$3 AND stems_per_bunch=$4) AS adjusted_bunches,
+        (SELECT COALESCE(SUM(bunches),0)::int FROM inventory_waste WHERE source_date=$1::date AND variety=$2 AND grade_cm=$3 AND stems_per_bunch=$4 AND canceled_at IS NULL) AS waste_bunches`,
+      [row.date, row.variety, gradeCm, row.stemsPerBunch, gradeCm === 'BAJAS' ? ['BAJAS', 'BAJAS GRANEL'] : [gradeCm]]);
+      const available = Math.max(0, Number(stock.rows[0].source_bunches) - Number(stock.rows[0].used_bunches) - (gradeCm === 'BAJAS' ? Number(stock.rows[0].transferred_bunches) : 0) + Number(stock.rows[0].adjusted_bunches) - Number(stock.rows[0].waste_bunches));
+      const used = Math.min(pending, available);
+      if (!used) continue;
+      const saved = await client.query('INSERT INTO inventory_waste (source_date,variety,grade_cm,stems_per_bunch,bunches,responsible,reason,batch_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *', [row.date, row.variety, gradeCm, row.stemsPerBunch, used, responsible, reason, batchId]);
+      result.push(mapWaste(saved.rows[0])); pending -= used;
+    }
+    if (pending) throw new Error(`No hay suficientes ramos para desechar. Disponibles: ${bunches - pending}. Actualice el inventario.`);
+    await client.query('COMMIT'); return result;
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
+}
+
 async function cancelWaste(id, input) {
   const wasteId = Number(id);
   const reason = String(input.reason || '').trim();
@@ -993,13 +1053,17 @@ async function cancelWaste(id, input) {
   if (!usePostgres) {
     const waste = memory.waste.find(row => row.id === wasteId);
     if (!waste || waste.canceledAt) throw new Error('Desecho no encontrado o ya anulado.');
-    const stock = memory.inventory.find(row => inventoryKey({ ...row, date: dateOnly(row.date ?? row.updatedAt), gradeCm: row.gradeCm || 'NACIONAL' }) === inventoryKey({ sourceDate: waste.date, variety: waste.variety, gradeCm: waste.gradeCm, stemsPerBunch: waste.stemsPerBunch }));
-    if (stock) { stock.bunches += waste.bunches; stock.stems += waste.bunches * waste.stemsPerBunch; }
-    waste.canceledAt = new Date().toISOString(); waste.cancellationReason = reason; persistMemory(); return mapWaste(waste);
+    const related = waste.batchId ? memory.waste.filter(row => row.batchId === waste.batchId && !row.canceledAt) : [waste];
+    for (const item of related) {
+      const stock = memory.inventory.find(row => inventoryKey({ ...row, date: dateOnly(row.date ?? row.updatedAt), gradeCm: row.gradeCm || 'NACIONAL' }) === inventoryKey({ sourceDate: item.date, variety: item.variety, gradeCm: item.gradeCm, stemsPerBunch: item.stemsPerBunch }));
+      if (stock) { stock.bunches += item.bunches; stock.stems += item.bunches * item.stemsPerBunch; }
+      item.canceledAt = new Date().toISOString(); item.cancellationReason = reason;
+    }
+    persistMemory(); return related.map(mapWaste);
   }
-  const result = await pool.query('UPDATE inventory_waste SET canceled_at=NOW(),cancellation_reason=$2 WHERE id=$1 AND canceled_at IS NULL RETURNING *', [wasteId, reason]);
-  if (!result.rows[0]) throw new Error('Desecho no encontrado o ya anulado.');
-  return mapWaste(result.rows[0]);
+  const result = await pool.query('UPDATE inventory_waste SET canceled_at=NOW(),cancellation_reason=$2 WHERE canceled_at IS NULL AND (id=$1 OR batch_id=(SELECT batch_id FROM inventory_waste WHERE id=$1)) RETURNING *', [wasteId, reason]);
+  if (!result.rows.length) throw new Error('Desecho no encontrado o ya anulado.');
+  return result.rows.map(mapWaste);
 }
 
 async function listRemissions(limit = 100) {

@@ -1,5 +1,5 @@
 const varieties = ['FREEDOM', 'PINK FLOYD', 'MONDIAL', 'HUMMER', 'MOMENTUM', 'CORAL REEF', 'QUICK SAND', 'HILUX', 'CANDLELIGHT', 'DEEP PURPLE', 'SUMMERSAND', 'STAR PLATINUM', 'SHIMMER', 'PINK OHARA', 'WHITE OHARA', 'PINK MONDIAL', 'BLESSING', 'PINK AMARETO', 'TIFFANY', 'YELLOW BIKINI', 'QUEEN BERRY', 'MOODY BLUE', 'SWAN', 'HIGH MAGIC', 'EXPLORER', 'DANCING RED', 'VENDELA'];
-const state = { inventory: [], inventoryFingerprint: '', inventoryRefreshPromise: null, inventoryLastSyncedAt: null, inventorySyncError: '', refreshVersion: 0, reconciliationSources: [], adjustments: [], remissions: [], prices: [], transfers: [], waste: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], wasteReport: [], inventoryReport: null, reportRange: '', stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
+const state = { inventory: [], inventoryFingerprint: '', inventoryRefreshPromise: null, inventoryLastSyncedAt: null, inventorySyncError: '', refreshVersion: 0, reconciliationSources: [], adjustments: [], remissions: [], prices: [], transfers: [], waste: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), selectedPriceGrades: new Map(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], wasteReport: [], inventoryReport: null, reportRange: '', stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const money = value => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', currencyDisplay: 'code', maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -172,9 +172,18 @@ function renderTransfers() {
 function renderWaste() {
   const select = $('#waste-source');
   const selected = select.value;
-  select.innerHTML = '<option value="">Seleccione un lote</option>' + state.inventory.filter(row => row.bunches > 0).map(row => `<option value="${escapeHtml(row.key)}">${escapeHtml(inventoryDate(row.date))} · ${escapeHtml(row.variety)} · ${escapeHtml(row.gradeCm)} · ${number(row.stemsPerBunch)} tallos/ramo · ${number(row.bunches)} ramos</option>`).join('');
+  const groups = groupedInventory(state.inventory.filter(row => row.bunches > 0));
+  select.innerHTML = '<option value="">Seleccione una variedad y grado</option>' + groups.map(row => `<option value="${escapeHtml(JSON.stringify([row.variety, row.gradeCm]))}">${escapeHtml(row.variety)} · ${escapeHtml(row.gradeCm)} · ${number(row.bunches)} ${row.bunches === 1 ? 'ramo disponible' : 'ramos disponibles'}</option>`).join('');
   select.value = selected;
-  $('#waste-history-body').innerHTML = state.waste.map(row => `<tr><td>${dateTime(row.createdAt)}</td><td><strong>${escapeHtml(row.variety)}</strong><br>${inventoryDate(row.date)} · ${escapeHtml(row.gradeCm)} · ${number(row.stemsPerBunch)} tallos/ramo</td><td>${number(row.bunches)}</td><td>${number(row.stems)}</td><td>${escapeHtml(row.responsible)}</td><td>${escapeHtml(row.reason)}${row.cancellationReason ? `<br><small>Anulación: ${escapeHtml(row.cancellationReason)}</small>` : ''}</td><td>${row.canceledAt ? '<span class="workflow-status workflow-status--canceled">Anulado</span>' : '<span class="workflow-status workflow-status--done">Descontado</span>'}</td><td>${row.canceledAt ? '' : `<button class="small-button small-button--danger" type="button" data-cancel-waste="${row.id}">Anular</button>`}</td></tr>`).join('');
+  const history = new Map();
+  state.waste.forEach(row => {
+    const key = row.batchId || `legacy-${row.id}`;
+    const entry = history.get(key) || { ...row, bunches: 0, stems: 0, lots: [] };
+    entry.bunches += row.bunches; entry.stems += row.stems;
+    entry.lots.push(`${inventoryDate(row.date)} · ${number(row.bunches)} ${row.bunches === 1 ? 'ramo' : 'ramos'} de ${number(row.stemsPerBunch)} tallos`);
+    history.set(key, entry);
+  });
+  $('#waste-history-body').innerHTML = [...history.values()].map(row => `<tr><td>${dateTime(row.createdAt)}</td><td><strong>${escapeHtml(row.variety)} · ${escapeHtml(row.gradeCm)}</strong><br><small>${row.lots.map(escapeHtml).join('<br>')}</small></td><td>${number(row.bunches)}</td><td>${number(row.stems)}</td><td>${escapeHtml(row.responsible)}</td><td>${escapeHtml(row.reason)}${row.cancellationReason ? `<br><small>Anulación: ${escapeHtml(row.cancellationReason)}</small>` : ''}</td><td>${row.canceledAt ? '<span class="workflow-status workflow-status--canceled">Anulado</span>' : '<span class="workflow-status workflow-status--done">Descontado</span>'}</td><td>${row.canceledAt ? '' : `<button class="small-button small-button--danger" type="button" data-cancel-waste="${row.id}">Anular</button>`}</td></tr>`).join('');
   $('#waste-history-empty').classList.toggle('is-hidden', state.waste.length > 0);
 }
 
@@ -271,9 +280,6 @@ function selectedPrice(clientName, variety, gradeCm) {
 
 function renderPrices() {
   const prices = Array.isArray(state.prices) ? state.prices : [];
-  const selectedVariety = $('#price-variety').value;
-  $('#price-variety').innerHTML = '<option value="">Seleccione una variedad</option>' + [...varieties, 'EUCALIPTO'].map(variety => `<option value="${escapeHtml(variety)}">${escapeHtml(variety)}</option>`).join('');
-  $('#price-variety').value = selectedVariety;
   const clients = [...new Set(prices.map(row => row.clientName).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   $('#known-clients').innerHTML = clients.map(client => `<option value="${escapeHtml(client)}"></option>`).join('');
   $('#price-count').textContent = `${prices.length} ${prices.length === 1 ? 'PRECIO' : 'PRECIOS'}`;
@@ -284,22 +290,43 @@ function renderPrices() {
     groups.get(key).rows.push(row);
   });
   const cardColors = ['#176b57', '#265f99', '#7955a2', '#a05a28', '#9a3f58', '#28736e'];
+  const gradeOrder = ['NACIONAL', 'BAJAS', 'NACIONAL GRANEL', 'BAJAS GRANEL', '40', '50', '60', 'HOJA'];
+  const gradeLabel = grade => grade === 'HOJA' ? 'Eucalipto · Hoja' : ['40', '50', '60'].includes(grade) ? `Exportación ${grade} cm` : grade === 'NACIONAL GRANEL' ? 'Nacional granel' : grade === 'BAJAS GRANEL' ? 'Bajas granel' : grade === 'BAJAS' ? 'Bajas' : 'Nacional';
   $('#price-list-body').innerHTML = [...groups.entries()].map(([key, group], index) => {
-    const gradeSummary = ['NACIONAL', 'BAJAS', 'BAJAS GRANEL', 'NACIONAL GRANEL', '40', '50', '60', 'HOJA'].map(grade => {
-      const count = group.rows.filter(row => row.gradeCm === grade).length;
-      return count ? `${grade === 'HOJA' ? 'Hoja' : grade === 'BAJAS' ? 'Bajas' : grade === 'BAJAS GRANEL' ? 'Bajas granel' : ['40', '50', '60'].includes(grade) ? `Exportación ${grade} cm` : grade === 'NACIONAL GRANEL' ? 'Granel' : grade[0] + grade.slice(1).toLowerCase()}: ${count}` : '';
-    }).filter(Boolean).join(' · ');
+    const grades = gradeOrder.filter(grade => group.rows.some(row => row.gradeCm === grade));
+    const selectedGrade = grades.includes(state.selectedPriceGrades.get(key)) ? state.selectedPriceGrades.get(key) : grades[0];
+    state.selectedPriceGrades.set(key, selectedGrade);
+    const visibleRows = group.rows.filter(row => row.gradeCm === selectedGrade).sort((a, b) => a.variety.localeCompare(b.variety));
     const expanded = state.expandedPriceClients.has(key);
-    return `<article class="price-client-card${expanded ? ' is-expanded' : ''}" style="--client-color:${cardColors[index % cardColors.length]}"><header><div><span>CLIENTE</span><h4>${escapeHtml(group.clientName)}</h4><small>${group.rows.length} ${group.rows.length === 1 ? 'precio configurado' : 'precios configurados'} · ${escapeHtml(gradeSummary)}</small></div><div class="price-client-actions"><button class="small-button" type="button" data-toggle-price-client="${escapeHtml(key)}">${expanded ? 'Ocultar detalle' : 'Ver detalle'}</button><button class="small-button" type="button" data-edit-price-client="${escapeHtml(key)}">Editar lista</button><button class="small-button small-button--danger" type="button" data-delete-price-client="${escapeHtml(key)}">Eliminar precios</button></div></header><div class="price-client-items">${group.rows.map(row => `<div><strong>${escapeHtml(row.variety)}</strong><span class="grade-chip">${escapeHtml(row.gradeCm)}</span><b>${money(row.pricePerBunch)}${row.gradeCm === 'HOJA' ? ' / tallo' : ' / ramo'}</b></div>`).join('')}</div></article>`;
+    return `<article class="price-client-card${expanded ? ' is-expanded' : ''}" style="--client-color:${cardColors[index % cardColors.length]}"><header><div><span>CLIENTE</span><h4>${escapeHtml(group.clientName)}</h4><small>${group.rows.length} ${group.rows.length === 1 ? 'precio configurado' : 'precios configurados'} · ${grades.length} ${grades.length === 1 ? 'grado' : 'grados'}</small></div><div class="price-client-actions"><button class="small-button" type="button" data-toggle-price-client="${escapeHtml(key)}">${expanded ? 'Ocultar detalle' : 'Ver precios'}</button><button class="small-button" type="button" data-edit-price-client="${escapeHtml(key)}">Editar lista</button><button class="small-button small-button--danger" type="button" data-delete-price-client="${escapeHtml(key)}">Eliminar precios</button></div></header><div class="price-client-detail"><nav class="price-grade-tabs" aria-label="Grados de ${escapeHtml(group.clientName)}">${grades.map(grade => `<button class="price-grade-tab${grade === selectedGrade ? ' is-active' : ''}" type="button" data-price-client="${escapeHtml(key)}" data-price-grade="${escapeHtml(grade)}" aria-pressed="${grade === selectedGrade}">${escapeHtml(gradeLabel(grade))}<span>${group.rows.filter(row => row.gradeCm === grade).length}</span></button>`).join('')}</nav><div class="price-grade-heading"><strong>${escapeHtml(gradeLabel(selectedGrade))}</strong><span>${visibleRows.length} ${visibleRows.length === 1 ? 'variedad' : 'variedades'}</span></div><div class="price-client-items">${visibleRows.map(row => `<div><strong>${escapeHtml(row.variety)}</strong><b>${money(row.pricePerBunch)} <small>/ ${row.gradeCm === 'HOJA' ? 'tallo' : 'ramo'}</small></b></div>`).join('')}</div></div></article>`;
   }).join('');
   $('#price-list-empty').classList.toggle('is-hidden', prices.length > 0);
+  renderPriceEntry();
+}
+
+function renderPriceEntry() {
+  const grade = $('#price-form').elements.gradeCm.value;
+  const labels = { NACIONAL: 'Nacional', BAJAS: 'Bajas', 'NACIONAL GRANEL': 'Nacional granel', 'BAJAS GRANEL': 'Bajas granel', 40: 'Exportación 40 cm', 50: 'Exportación 50 cm', 60: 'Exportación 60 cm', HOJA: 'Eucalipto · Hoja' };
+  $('#price-entry-tabs').innerHTML = [...$('#price-form').elements.gradeCm.options].map(option => {
+    const count = state.priceDrafts.filter(row => row.gradeCm === option.value).length;
+    return `<button class="price-grade-tab${grade === option.value ? ' is-active' : ''}" type="button" data-price-entry-grade="${escapeHtml(option.value)}" aria-pressed="${grade === option.value}">${labels[option.value] || escapeHtml(option.value)}${count ? `<span>${count}</span>` : ''}</button>`;
+  }).join('');
+  const select = $('#price-variety');
+  const selected = select.value;
+  const options = grade === 'HOJA' ? ['EUCALIPTO'] : varieties;
+  select.innerHTML = '<option value="">Seleccione una variedad</option>' + options.map(variety => `<option value="${escapeHtml(variety)}">${escapeHtml(variety)}</option>`).join('');
+  select.value = options.includes(selected) ? selected : '';
+  $('#price-unit-label').firstChild.textContent = grade === 'HOJA' ? 'Precio por tallo (COP)' : 'Precio por ramo (COP)';
   renderPriceDrafts();
 }
 
 function renderPriceDrafts() {
   const element = $('#price-draft-lines');
   if (!element) return;
-  element.innerHTML = state.priceDrafts.map((row, index) => `<div class="price-draft-row"><strong>${escapeHtml(row.variety)}</strong><span>${escapeHtml(row.gradeCm)}</span><b>${money(row.pricePerBunch)}${row.gradeCm === 'HOJA' ? ' / tallo' : ' / ramo'}</b><button type="button" class="remove-line" data-remove-price-draft="${index}" aria-label="Quitar ${escapeHtml(row.variety)}">×</button></div>`).join('') || '<span class="price-draft-empty">Agregue varias variedades y guárdelas juntas para este cliente.</span>';
+  const grade = $('#price-form').elements.gradeCm.value;
+  const visible = state.priceDrafts.map((row, index) => ({ row, index })).filter(item => item.row.gradeCm === grade);
+  $('#price-draft-heading').textContent = `${state.priceDrafts.length} precios preparados en total · ${visible.length} en este grado. Al guardar se incluyen todos los grados.`;
+  element.innerHTML = visible.map(({ row, index }) => `<div class="price-draft-row"><strong>${escapeHtml(row.variety)}</strong><b>${money(row.pricePerBunch)}${row.gradeCm === 'HOJA' ? ' / tallo' : ' / ramo'}</b><button type="button" class="remove-line" data-remove-price-draft="${index}" aria-label="Quitar ${escapeHtml(row.variety)}">×</button></div>`).join('') || '<span class="price-draft-empty">Aún no hay variedades agregadas en este grado.</span>';
 }
 
 function addPriceDraft() {
@@ -317,7 +344,7 @@ function addPriceDraft() {
   else state.priceDrafts.push({ variety, gradeCm, pricePerBunch });
   $('#price-variety').value = '';
   form.elements.pricePerBunch.value = '';
-  renderPriceDrafts();
+  renderPriceEntry();
 }
 
 function addRemainingPriceDrafts() {
@@ -337,7 +364,7 @@ function addRemainingPriceDrafts() {
   if (!remaining.length) return error.textContent = `Ya están agregadas todas las variedades para ${gradeCm}.`;
   state.priceDrafts.push(...remaining.map(variety => ({ variety, gradeCm, pricePerBunch })));
   form.elements.pricePerBunch.value = '';
-  renderPriceDrafts();
+  renderPriceEntry();
   toast(`${remaining.length} variedades agregadas con el mismo precio.`);
 }
 
@@ -636,6 +663,8 @@ document.addEventListener('click', async event => {
   const editPriceClient = event.target.closest('[data-edit-price-client]');
   const deletePriceClient = event.target.closest('[data-delete-price-client]');
   const togglePriceClient = event.target.closest('[data-toggle-price-client]');
+  const priceGradeButton = event.target.closest('[data-price-grade]');
+  const priceEntryGradeButton = event.target.closest('[data-price-entry-grade]');
   const varietyPickerToggle = event.target.closest('.variety-picker-trigger');
   const varietyPickerOption = event.target.closest('[data-line-variety-option]');
   const closeButton = event.target.closest('[data-close-dialog]');
@@ -663,7 +692,7 @@ document.addEventListener('click', async event => {
     } catch (requestError) { toast(requestError.message); cancelWasteButton.disabled = false; }
   }
   if (removeButton) { state.lines = state.lines.filter(row => row.key !== removeButton.dataset.removeLine); $('#remission-error').textContent = ''; renderLines(); }
-  if (removePriceDraft) { state.priceDrafts.splice(Number(removePriceDraft.dataset.removePriceDraft), 1); renderPriceDrafts(); }
+  if (removePriceDraft) { state.priceDrafts.splice(Number(removePriceDraft.dataset.removePriceDraft), 1); renderPriceEntry(); }
   if (varietyPickerToggle) {
     const picker = $('#line-variety-picker');
     const open = picker.classList.toggle('is-open');
@@ -681,6 +710,15 @@ document.addEventListener('click', async event => {
     else state.expandedPriceClients.add(key);
     renderPrices();
   }
+  if (priceGradeButton) {
+    state.selectedPriceGrades.set(priceGradeButton.dataset.priceClient, priceGradeButton.dataset.priceGrade);
+    renderPrices();
+  }
+  if (priceEntryGradeButton) {
+    $('#price-form').elements.gradeCm.value = priceEntryGradeButton.dataset.priceEntryGrade;
+    $('#price-error').textContent = '';
+    renderPriceEntry();
+  }
   if (editPriceClient) {
     const key = editPriceClient.dataset.editPriceClient;
     const rows = state.prices.filter(row => (clientKey(row.clientName) || '__GENERAL__') === key);
@@ -688,10 +726,11 @@ document.addEventListener('click', async event => {
       state.editingPriceClientKey = key;
       state.priceDrafts = rows.map(row => ({ variety: varieties.find(variety => clientKey(variety) === clientKey(row.variety)) || row.variety, gradeCm: row.gradeCm, pricePerBunch: row.pricePerBunch }));
       $('#price-client-name').value = rows[0].clientName || '';
+      $('#price-form').elements.gradeCm.value = rows.some(row => row.gradeCm === 'NACIONAL') ? 'NACIONAL' : rows[0].gradeCm;
       $('#price-variety').value = '';
       $('#price-form').elements.pricePerBunch.value = '';
       $('#price-error').textContent = 'Editando la lista completa: puede cambiar, agregar o quitar variedades y luego guardar.';
-      renderPriceDrafts();
+      renderPriceEntry();
       switchView('prices');
     }
   }
@@ -749,15 +788,7 @@ $('#add-line-button').addEventListener('click', () => {
 });
 
 $('#export-variety').innerHTML = '<option value="">Seleccione una variedad</option>' + varieties.map(variety => `<option value="${escapeHtml(variety)}">${escapeHtml(variety)}</option>`).join('');
-$('#price-variety').addEventListener('change', () => {
-  const form = $('#price-form');
-  if ($('#price-variety').value === 'EUCALIPTO') form.elements.gradeCm.value = 'HOJA';
-  else if (form.elements.gradeCm.value === 'HOJA') form.elements.gradeCm.value = 'NACIONAL';
-  $('#price-unit-label').firstChild.textContent = form.elements.gradeCm.value === 'HOJA' ? 'Precio por tallo (COP)' : 'Precio por ramo (COP)';
-});
-$('#price-form').elements.gradeCm.addEventListener('change', () => {
-  $('#price-unit-label').firstChild.textContent = $('#price-form').elements.gradeCm.value === 'HOJA' ? 'Precio por tallo (COP)' : 'Precio por ramo (COP)';
-});
+$('#price-form').elements.gradeCm.addEventListener('change', renderPriceEntry);
 $('#add-export-button').addEventListener('click', () => {
   const isDonation = $('#export-donation').checked;
   const variety = $('#export-variety').value;
