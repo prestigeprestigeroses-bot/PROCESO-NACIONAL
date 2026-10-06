@@ -1,5 +1,5 @@
 const varieties = ['FREEDOM', 'PINK FLOYD', 'MONDIAL', 'HUMMER', 'MOMENTUM', 'CORAL REEF', 'QUICK SAND', 'HILUX', 'CANDLELIGHT', 'DEEP PURPLE', 'SUMMERSAND', 'STAR PLATINUM', 'SHIMMER', 'PINK OHARA', 'WHITE OHARA', 'PINK MONDIAL', 'BLESSING', 'PINK AMARETO', 'TIFFANY', 'YELLOW BIKINI', 'QUEEN BERRY', 'MOODY BLUE', 'SWAN', 'HIGH MAGIC', 'EXPLORER', 'DANCING RED', 'VENDELA'];
-const state = { inventory: [], inventoryFingerprint: '', inventoryRefreshPromise: null, inventoryLastSyncedAt: null, inventorySyncError: '', refreshVersion: 0, reconciliationSources: [], adjustments: [], remissions: [], prices: [], transfers: [], waste: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), selectedPriceGrades: new Map(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], wasteReport: [], inventoryReport: null, reportRange: '', stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
+const state = { inventory: [], inventoryFingerprint: '', inventoryRefreshPromise: null, inventoryLastSyncedAt: null, inventorySyncError: '', refreshVersion: 0, reconciliationSources: [], adjustments: [], remissions: [], prices: [], transfers: [], waste: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), selectedPriceGrades: new Map(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], wasteReport: [], movementsReport: { adjustments: [], transfers: [] }, inventoryReport: null, reportRange: '', stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const money = value => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', currencyDisplay: 'code', maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -139,9 +139,19 @@ function renderInventory() {
 }
 
 function renderReconciliation() {
+  const gradeSelect = $('#reconcile-grade');
+  const varietySelect = $('#reconcile-variety');
+  const grades = [...new Set(state.reconciliationSources.map(row => row.gradeCm))].sort();
+  const selectedGrade = gradeSelect.value;
+  gradeSelect.innerHTML = '<option value="">Seleccione un grado</option>' + grades.map(grade => `<option value="${escapeHtml(grade)}">${escapeHtml(grade)}</option>`).join('');
+  gradeSelect.value = selectedGrade;
+  const varietiesInGrade = [...new Set(state.reconciliationSources.filter(row => row.gradeCm === gradeSelect.value).map(row => row.variety))].sort();
+  const selectedVariety = varietySelect.value;
+  varietySelect.innerHTML = '<option value="">Seleccione una variedad</option>' + varietiesInGrade.map(variety => `<option value="${escapeHtml(variety)}">${escapeHtml(variety)}</option>`).join('');
+  varietySelect.value = selectedVariety;
   const select = $('#reconcile-source');
   const selected = select.value;
-  select.innerHTML = '<option value="">Seleccione un lote</option>' + state.reconciliationSources.map(row => `<option value="${escapeHtml(row.key)}">${inventoryDate(row.date)} · ${escapeHtml(row.variety)} · ${escapeHtml(row.gradeCm)} · ${number(row.stemsPerBunch)} tallos/ramo · ${number(row.bunches)} ramos</option>`).join('');
+  select.innerHTML = '<option value="">Seleccione un lote</option>' + state.reconciliationSources.filter(row => row.gradeCm === gradeSelect.value && row.variety === varietySelect.value).map(row => `<option value="${escapeHtml(row.key)}">${inventoryDate(row.date)} · ${number(row.stemsPerBunch)} tallos/ramo · ${number(row.bunches)} ramos</option>`).join('');
   select.value = selected;
   if (select.value !== selected) $('#reconcile-counted').value = '';
   updateReconciliationDifference();
@@ -170,10 +180,14 @@ function renderTransfers() {
 }
 
 function renderWaste() {
+  const gradeSelect = $('#waste-grade');
+  const groups = groupedInventory(state.inventory.filter(row => row.bunches > 0));
+  const selectedGrade = gradeSelect.value;
+  gradeSelect.innerHTML = '<option value="">Seleccione un grado</option>' + [...new Set(groups.map(row => row.gradeCm))].sort().map(grade => `<option value="${escapeHtml(grade)}">${escapeHtml(grade)}</option>`).join('');
+  gradeSelect.value = selectedGrade;
   const select = $('#waste-source');
   const selected = select.value;
-  const groups = groupedInventory(state.inventory.filter(row => row.bunches > 0));
-  select.innerHTML = '<option value="">Seleccione una variedad y grado</option>' + groups.map(row => `<option value="${escapeHtml(JSON.stringify([row.variety, row.gradeCm]))}">${escapeHtml(row.variety)} · ${escapeHtml(row.gradeCm)} · ${number(row.bunches)} ${row.bunches === 1 ? 'ramo disponible' : 'ramos disponibles'}</option>`).join('');
+  select.innerHTML = '<option value="">Seleccione una variedad</option>' + groups.filter(row => row.gradeCm === gradeSelect.value).map(row => `<option value="${escapeHtml(JSON.stringify([row.variety, row.gradeCm]))}">${escapeHtml(row.variety)} · ${number(row.bunches)} ${row.bunches === 1 ? 'ramo disponible' : 'ramos disponibles'}</option>`).join('');
   select.value = selected;
   const history = new Map();
   state.waste.forEach(row => {
@@ -446,15 +460,23 @@ function renderWasteReport() {
   $('#report-waste-empty').classList.toggle('is-hidden', rows.length > 0);
 }
 
+function renderMovementsReport() {
+  const { adjustments, transfers } = state.movementsReport;
+  $('#report-adjustments-body').innerHTML = adjustments.map(row => `<tr><td>${dateTime(row.createdAt)}</td><td><strong>${escapeHtml(row.variety)}</strong></td><td>${escapeHtml(row.gradeCm)}</td><td>${inventoryDate(row.date)} · ${number(row.stemsPerBunch)} tallos/ramo</td><td>${number(row.beforeBunches)}</td><td>${number(row.countedBunches)}</td><td>${row.deltaBunches > 0 ? '+' : ''}${number(row.deltaBunches)}</td><td>${escapeHtml(row.responsible)}<br>${escapeHtml(row.reason)}</td></tr>`).join('');
+  $('#report-adjustments-empty').classList.toggle('is-hidden', adjustments.length > 0);
+  $('#report-transfers-body').innerHTML = transfers.map(row => `<tr><td>${dateTime(row.createdAt)}</td><td><strong>${escapeHtml(row.variety)}</strong></td><td>${number(row.bunches)}</td><td>${number(row.stems)}</td><td>${escapeHtml(row.responsible)}</td><td>${escapeHtml(row.reason)}</td></tr>`).join('');
+  $('#report-transfers-empty').classList.toggle('is-hidden', transfers.length > 0);
+}
+
 async function generateReport() {
   const from = $('#report-from').value; const to = $('#report-to').value;
   if (!from || !to) return toast('Seleccione las dos fechas para generar el informe.');
   if (from > to) return toast('La fecha inicial no puede ser posterior a la final.');
   try {
     const query = `from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
-    const [rows, inventory, waste] = await Promise.all([api(`/api/reports/sales?${query}`), api(`/api/reports/inventory?${query}`), api(`/api/reports/waste?${query}`)]);
-    state.reportRows = rows; state.inventoryReport = inventory; state.wasteReport = waste; state.reportRange = `${from}|${to}`;
-    renderReport(); renderInventoryReport(); renderWasteReport();
+    const [rows, inventory, waste, movements] = await Promise.all([api(`/api/reports/sales?${query}`), api(`/api/reports/inventory?${query}`), api(`/api/reports/waste?${query}`), api(`/api/reports/movements?${query}`)]);
+    state.reportRows = rows; state.inventoryReport = inventory; state.wasteReport = waste; state.movementsReport = movements; state.reportRange = `${from}|${to}`;
+    renderReport(); renderInventoryReport(); renderWasteReport(); renderMovementsReport();
   }
   catch (error) { toast(error.message); }
 }
@@ -568,6 +590,9 @@ $$('[data-go]').forEach(button => button.addEventListener('click', () => switchV
 $('#menu-button').addEventListener('click', () => $('#sidebar').classList.toggle('open'));
 $('#inventory-search').addEventListener('input', renderInventory);
 $('#reconcile-source').addEventListener('change', () => { $('#reconcile-counted').value = ''; $('#reconcile-error').textContent = ''; updateReconciliationDifference(); });
+$('#reconcile-grade').addEventListener('change', () => { $('#reconcile-variety').value = ''; $('#reconcile-source').value = ''; $('#reconcile-counted').value = ''; renderReconciliation(); });
+$('#reconcile-variety').addEventListener('change', () => { $('#reconcile-source').value = ''; $('#reconcile-counted').value = ''; renderReconciliation(); });
+$('#waste-grade').addEventListener('change', () => { $('#waste-source').value = ''; renderWaste(); });
 $('#reconcile-counted').addEventListener('input', updateReconciliationDifference);
 $('#reconcile-form').addEventListener('submit', async event => {
   event.preventDefault();

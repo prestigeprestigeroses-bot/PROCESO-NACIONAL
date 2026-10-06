@@ -1128,6 +1128,24 @@ async function wasteReport(from, to) {
   return result.rows.map(mapWaste);
 }
 
+async function movementsReport(from, to) {
+  const start = String(from || '').slice(0, 10);
+  const end = String(to || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || start > end) throw new Error('Seleccione un rango de fechas válido.');
+  if (!usePostgres) return {
+    adjustments: memory.adjustments.filter(row => dateOnly(row.createdAt) >= start && dateOnly(row.createdAt) <= end),
+    transfers: memory.transfers.filter(row => !row.canceledAt && dateOnly(row.createdAt) >= start && dateOnly(row.createdAt) <= end)
+  };
+  const [adjustments, transfers] = await Promise.all([
+    pool.query('SELECT * FROM inventory_adjustments WHERE (created_at AT TIME ZONE $3)::date BETWEEN $1::date AND $2::date ORDER BY created_at DESC,id DESC', [start, end, businessTimeZone]),
+    pool.query('SELECT * FROM export_transfers WHERE canceled_at IS NULL AND (created_at AT TIME ZONE $3)::date BETWEEN $1::date AND $2::date ORDER BY created_at DESC,id DESC', [start, end, businessTimeZone])
+  ]);
+  return {
+    adjustments: adjustments.rows.map(row => ({ id: Number(row.id), date: dateOnly(row.source_date), variety: row.variety, gradeCm: row.grade_cm, stemsPerBunch: Number(row.stems_per_bunch), beforeBunches: Number(row.before_bunches), countedBunches: Number(row.counted_bunches), deltaBunches: Number(row.delta_bunches), responsible: row.responsible, reason: row.reason, createdAt: row.created_at })),
+    transfers: transfers.rows.map(row => ({ id: Number(row.id), variety: row.variety, bunches: Number(row.bunches), stems: Number(row.stems), responsible: row.responsible, reason: row.reason, createdAt: row.created_at }))
+  };
+}
+
 async function inventorySnapshot(cutoffDate) {
   if (!usePostgres) throw new Error('El informe histórico de inventario requiere PostgreSQL.');
   const result = await pool.query(`
@@ -1193,4 +1211,4 @@ async function inventoryReport(from, to) {
   return { from: start, to: end, opening, closing };
 }
 
-module.exports = { init, listInventory, listInventoryAdjustments, reconcileInventory, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, assignRemissionItems, setRemissionPrices, cancelRemission, renumberRemissions, listExportTransfers, createExportTransfer, cancelExportTransfer, listWaste, createWaste, cancelWaste, listRemissions, getRemission, dashboard, salesReport, wasteReport, inventoryReport, usePostgres };
+module.exports = { init, listInventory, listInventoryAdjustments, reconcileInventory, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, assignRemissionItems, setRemissionPrices, cancelRemission, renumberRemissions, listExportTransfers, createExportTransfer, cancelExportTransfer, listWaste, createWaste, cancelWaste, listRemissions, getRemission, dashboard, salesReport, wasteReport, movementsReport, inventoryReport, usePostgres };
