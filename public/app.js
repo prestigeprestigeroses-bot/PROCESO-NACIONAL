@@ -1,5 +1,5 @@
 const varieties = ['FREEDOM', 'PINK FLOYD', 'MONDIAL', 'HUMMER', 'MOMENTUM', 'CORAL REEF', 'QUICK SAND', 'HILUX', 'CANDLELIGHT', 'DEEP PURPLE', 'SUMMERSAND', 'STAR PLATINUM', 'SHIMMER', 'PINK OHARA', 'WHITE OHARA', 'PINK MONDIAL', 'BLESSING', 'PINK AMARETO', 'TIFFANY', 'YELLOW BIKINI', 'QUEEN BERRY', 'MOODY BLUE', 'SWAN', 'HIGH MAGIC', 'EXPLORER', 'DANCING RED', 'VENDELA'];
-const state = { inventory: [], inventoryFingerprint: '', inventoryRefreshPromise: null, inventoryLastSyncedAt: null, inventorySyncError: '', refreshVersion: 0, reconciliationSources: [], adjustments: [], remissions: [], prices: [], transfers: [], waste: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), selectedPriceGrades: new Map(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], wasteReport: [], movementsReport: { adjustments: [], transfers: [] }, inventoryReport: null, reportRange: '', stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
+const state = { inventory: [], inventoryFingerprint: '', inventoryRefreshPromise: null, inventoryLastSyncedAt: null, inventorySyncError: '', refreshVersion: 0, reconciliationSources: [], adjustments: [], remissions: [], prices: [], transfers: [], gradeTransfers: [], waste: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), selectedPriceGrades: new Map(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], wasteReport: [], movementsReport: { adjustments: [], transfers: [], gradeTransfers: [] }, inventoryReport: null, reportRange: '', stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const money = value => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', currencyDisplay: 'code', maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -34,16 +34,17 @@ async function refreshAll() {
   const version = ++state.refreshVersion;
   const fresh = { cache: 'no-store' };
   const inventoryRefresh = refreshInventory().catch(() => false);
-  const results = await Promise.allSettled([api('/api/dashboard', fresh), api('/api/config', fresh), api('/api/price-lists', fresh), api('/api/export-transfers', fresh), api('/api/inventory/reconciliation', fresh), api('/api/inventory/waste', fresh)]);
+  const results = await Promise.allSettled([api('/api/dashboard', fresh), api('/api/config', fresh), api('/api/price-lists', fresh), api('/api/export-transfers', fresh), api('/api/inventory/reconciliation', fresh), api('/api/inventory/waste', fresh), api('/api/inventory/grade-transfers', fresh)]);
   await inventoryRefresh;
   if (version !== state.refreshVersion) return;
-  const [dashboard, config, prices, transfers, reconciliation, waste] = results;
+  const [dashboard, config, prices, transfers, reconciliation, waste, gradeTransfers] = results;
   if (dashboard.status === 'fulfilled') { state.remissions = dashboard.value.remissions; state.totals = dashboard.value.totals; renderDashboard(); renderHistory(); }
   if (config.status === 'fulfilled') state.config = config.value;
   if (prices.status === 'fulfilled') { state.prices = normalizePriceList(prices.value); renderPrices(); }
   if (transfers.status === 'fulfilled') { state.transfers = transfers.value; renderTransfers(); }
   if (reconciliation.status === 'fulfilled') { state.reconciliationSources = reconciliation.value.sources; state.adjustments = reconciliation.value.adjustments; renderReconciliation(); }
   if (waste.status === 'fulfilled') { state.waste = waste.value; renderWaste(); }
+  if (gradeTransfers.status === 'fulfilled') { state.gradeTransfers = gradeTransfers.value; renderGradeTransfers(); }
 }
 
 function renderInventorySyncStatus() {
@@ -61,7 +62,7 @@ async function refreshInventory() {
       state.inventoryLastSyncedAt = new Date();
       state.inventorySyncError = '';
       renderInventorySyncStatus();
-      renderDashboard(); renderInventory(); renderReconciliation(); renderTransfers(); renderWaste();
+      renderDashboard(); renderInventory(); renderReconciliation(); renderTransfers(); renderWaste(); renderGradeTransfers();
       return changed;
     } catch (error) {
       state.inventorySyncError = error.message;
@@ -177,6 +178,24 @@ function renderTransfers() {
   select.value = selected;
   $('#transfer-history-body').innerHTML = state.transfers.map(row => `<tr><td>${dateTime(row.createdAt)}</td><td><strong>${escapeHtml(row.variety)}</strong></td><td>${number(row.bunches)}</td><td>${number(row.stems)}</td><td>${escapeHtml(row.responsible)}</td><td>${escapeHtml(row.reason)}</td><td>${row.canceledAt ? '<span class="workflow-status workflow-status--canceled">Anulado</span>' : '<span class="workflow-status workflow-status--done">Registrado</span>'}</td><td>${row.canceledAt ? '' : `<button class="small-button small-button--danger" type="button" data-cancel-transfer="${row.id}">Anular</button>`}</td></tr>`).join('');
   $('#transfer-history-empty').classList.toggle('is-hidden', state.transfers.length > 0);
+}
+
+function renderGradeTransfers() {
+  const fromGrade = $('#grade-transfer-from').value;
+  const select = $('#grade-transfer-variety');
+  const selected = select.value;
+  const available = groupedInventory(state.inventory.filter(row => row.gradeCm === fromGrade && row.bunches > 0));
+  select.innerHTML = '<option value="">Seleccione una variedad</option>' + available.map(row => `<option value="${escapeHtml(row.variety)}">${escapeHtml(row.variety)} · ${number(row.bunches)} ramos disponibles</option>`).join('');
+  select.value = selected;
+  const batches = new Map();
+  state.gradeTransfers.forEach(row => {
+    const entry = batches.get(row.batchId) || { ...row, bunches: 0, stems: 0, lots: [] };
+    entry.bunches += row.bunches; entry.stems += row.stems;
+    entry.lots.push(`${inventoryDate(row.date)} · ${number(row.bunches)} ramos de ${number(row.stemsPerBunch)} tallos`);
+    batches.set(row.batchId, entry);
+  });
+  $('#grade-transfer-history-body').innerHTML = [...batches.values()].map(row => `<tr><td>${dateTime(row.createdAt)}</td><td><strong>${escapeHtml(row.variety)}</strong></td><td>${escapeHtml(row.fromGrade)} → ${escapeHtml(row.toGrade)}</td><td>${row.lots.map(escapeHtml).join('<br>')}</td><td>${number(row.bunches)}</td><td>${number(row.stems)}</td><td>${escapeHtml(row.responsible)}</td><td>${escapeHtml(row.reason)}</td></tr>`).join('');
+  $('#grade-transfer-history-empty').classList.toggle('is-hidden', batches.size > 0);
 }
 
 function renderWaste() {
@@ -461,11 +480,13 @@ function renderWasteReport() {
 }
 
 function renderMovementsReport() {
-  const { adjustments, transfers } = state.movementsReport;
+  const { adjustments, transfers, gradeTransfers = [] } = state.movementsReport;
   $('#report-adjustments-body').innerHTML = adjustments.map(row => `<tr><td>${dateTime(row.createdAt)}</td><td><strong>${escapeHtml(row.variety)}</strong></td><td>${escapeHtml(row.gradeCm)}</td><td>${inventoryDate(row.date)} · ${number(row.stemsPerBunch)} tallos/ramo</td><td>${number(row.beforeBunches)}</td><td>${number(row.countedBunches)}</td><td>${row.deltaBunches > 0 ? '+' : ''}${number(row.deltaBunches)}</td><td>${escapeHtml(row.responsible)}<br>${escapeHtml(row.reason)}</td></tr>`).join('');
   $('#report-adjustments-empty').classList.toggle('is-hidden', adjustments.length > 0);
   $('#report-transfers-body').innerHTML = transfers.map(row => `<tr><td>${dateTime(row.createdAt)}</td><td><strong>${escapeHtml(row.variety)}</strong></td><td>${number(row.bunches)}</td><td>${number(row.stems)}</td><td>${escapeHtml(row.responsible)}</td><td>${escapeHtml(row.reason)}</td></tr>`).join('');
   $('#report-transfers-empty').classList.toggle('is-hidden', transfers.length > 0);
+  $('#report-grade-transfers-body').innerHTML = gradeTransfers.map(row => `<tr><td>${dateTime(row.createdAt)}</td><td><strong>${escapeHtml(row.variety)}</strong></td><td>${escapeHtml(row.fromGrade)} → ${escapeHtml(row.toGrade)}</td><td>${number(row.bunches)}</td><td>${number(row.stems)}</td><td>${escapeHtml(row.responsible)}</td><td>${escapeHtml(row.reason)}</td></tr>`).join('');
+  $('#report-grade-transfers-empty').classList.toggle('is-hidden', gradeTransfers.length > 0);
 }
 
 async function generateReport() {
@@ -593,6 +614,12 @@ $('#reconcile-source').addEventListener('change', () => { $('#reconcile-counted'
 $('#reconcile-grade').addEventListener('change', () => { $('#reconcile-variety').value = ''; $('#reconcile-source').value = ''; $('#reconcile-counted').value = ''; renderReconciliation(); });
 $('#reconcile-variety').addEventListener('change', () => { $('#reconcile-source').value = ''; $('#reconcile-counted').value = ''; renderReconciliation(); });
 $('#waste-grade').addEventListener('change', () => { $('#waste-source').value = ''; renderWaste(); });
+$('#grade-transfer-from').addEventListener('change', () => {
+  $('#grade-transfer-variety').value = '';
+  if ($('#grade-transfer-to').value === $('#grade-transfer-from').value) $('#grade-transfer-to').value = '';
+  renderGradeTransfers();
+});
+$('#grade-transfer-to').addEventListener('change', () => { $('#grade-transfer-error').textContent = ''; });
 $('#reconcile-counted').addEventListener('input', updateReconciliationDifference);
 $('#reconcile-form').addEventListener('submit', async event => {
   event.preventDefault();
@@ -628,6 +655,22 @@ $('#export-transfer-form').addEventListener('submit', async event => {
     form.reset();
     await refreshAll();
     toast('Traslado registrado. Los ramos salieron de Bajas.');
+  } catch (requestError) { error.textContent = requestError.message; }
+  finally { button.disabled = false; }
+});
+$('#grade-transfer-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const payload = Object.fromEntries(new FormData(form));
+  const error = $('#grade-transfer-error'); error.textContent = '';
+  if (payload.fromGrade === payload.toGrade) return error.textContent = 'El grado de destino debe ser diferente al de origen.';
+  if (!window.confirm(`¿Trasladar ${payload.bunches} ramos de ${payload.variety} de ${payload.fromGrade} a ${payload.toGrade}?`)) return;
+  const button = event.submitter; button.disabled = true;
+  try {
+    await api('/api/inventory/grade-transfers', { method: 'POST', body: JSON.stringify(payload) });
+    form.reset();
+    await refreshAll();
+    toast('Cambio de grado registrado. El inventario se actualizó.');
   } catch (requestError) { error.textContent = requestError.message; }
   finally { button.disabled = false; }
 });
