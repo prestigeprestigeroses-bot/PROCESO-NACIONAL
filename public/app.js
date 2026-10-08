@@ -156,7 +156,7 @@ function renderReconciliation() {
   select.value = selected;
   if (select.value !== selected) $('#reconcile-counted').value = '';
   updateReconciliationDifference();
-  $('#reconcile-history-body').innerHTML = state.adjustments.map(row => `<tr><td>${dateTime(row.createdAt)}</td><td><strong>${escapeHtml(row.variety)}</strong><br>${escapeHtml(row.gradeCm)} · ${inventoryDate(row.date)} · ${number(row.stemsPerBunch)} tallos/ramo</td><td>${number(row.beforeBunches)}</td><td><strong>${number(row.countedBunches)}</strong></td><td>${row.deltaBunches > 0 ? '+' : ''}${number(row.deltaBunches)}</td><td><strong>${escapeHtml(row.responsible)}</strong><br>${escapeHtml(row.reason)}</td></tr>`).join('');
+  $('#reconcile-history-body').innerHTML = state.adjustments.map(row => `<tr><td>${dateTime(row.createdAt)}</td><td><strong>${escapeHtml(row.variety)}</strong><br>${escapeHtml(row.gradeCm)} · ${inventoryDate(row.date)} · ${number(row.stemsPerBunch)} tallos/ramo</td><td>${number(row.beforeBunches)}</td><td><strong>${number(row.countedBunches)}</strong></td><td>${row.deltaBunches > 0 ? '+' : ''}${number(row.deltaBunches)}</td><td><strong>${escapeHtml(row.responsible)}</strong><br>${escapeHtml(row.reason)}${row.cancellationReason ? `<br><small>Anulación: ${escapeHtml(row.cancellationReason)}</small>` : ''}</td><td>${row.canceledAt ? '<span class="workflow-status workflow-status--canceled">Anulado</span>' : '<span class="workflow-status workflow-status--done">Vigente</span>'}</td><td>${row.canceledAt ? '' : `<button class="small-button small-button--danger" type="button" data-cancel-adjustment="${row.id}">Anular</button>`}</td></tr>`).join('');
   $('#reconcile-history-empty').classList.toggle('is-hidden', state.adjustments.length > 0);
 }
 
@@ -481,7 +481,7 @@ function renderWasteReport() {
 
 function renderMovementsReport() {
   const { adjustments, transfers, gradeTransfers = [] } = state.movementsReport;
-  $('#report-adjustments-body').innerHTML = adjustments.map(row => `<tr><td>${dateTime(row.createdAt)}</td><td><strong>${escapeHtml(row.variety)}</strong></td><td>${escapeHtml(row.gradeCm)}</td><td>${inventoryDate(row.date)} · ${number(row.stemsPerBunch)} tallos/ramo</td><td>${number(row.beforeBunches)}</td><td>${number(row.countedBunches)}</td><td>${row.deltaBunches > 0 ? '+' : ''}${number(row.deltaBunches)}</td><td>${escapeHtml(row.responsible)}<br>${escapeHtml(row.reason)}</td></tr>`).join('');
+  $('#report-adjustments-body').innerHTML = adjustments.map(row => `<tr><td>${dateTime(row.createdAt)}</td><td><strong>${escapeHtml(row.variety)}</strong></td><td>${escapeHtml(row.gradeCm)}</td><td>${inventoryDate(row.date)} · ${number(row.stemsPerBunch)} tallos/ramo</td><td>${number(row.beforeBunches)}</td><td>${number(row.countedBunches)}</td><td>${row.deltaBunches > 0 ? '+' : ''}${number(row.deltaBunches)}</td><td>${escapeHtml(row.responsible)}<br>${escapeHtml(row.reason)}${row.cancellationReason ? `<br><small>Anulación: ${escapeHtml(row.cancellationReason)}</small>` : ''}</td><td>${row.canceledAt ? 'Anulado' : 'Vigente'}</td></tr>`).join('');
   $('#report-adjustments-empty').classList.toggle('is-hidden', adjustments.length > 0);
   $('#report-transfers-body').innerHTML = transfers.map(row => `<tr><td>${dateTime(row.createdAt)}</td><td><strong>${escapeHtml(row.variety)}</strong></td><td>${number(row.bunches)}</td><td>${number(row.stems)}</td><td>${escapeHtml(row.responsible)}</td><td>${escapeHtml(row.reason)}</td></tr>`).join('');
   $('#report-transfers-empty').classList.toggle('is-hidden', transfers.length > 0);
@@ -726,6 +726,7 @@ document.addEventListener('click', async event => {
   const cancelButton = event.target.closest('[data-cancel-remission]');
   const cancelTransferButton = event.target.closest('[data-cancel-transfer]');
   const cancelWasteButton = event.target.closest('[data-cancel-waste]');
+  const cancelAdjustmentButton = event.target.closest('[data-cancel-adjustment]');
   const removeButton = event.target.closest('[data-remove-line]');
   const removePriceDraft = event.target.closest('[data-remove-price-draft]');
   const editPriceClient = event.target.closest('[data-edit-price-client]');
@@ -758,6 +759,18 @@ document.addEventListener('click', async event => {
       await refreshAll();
       toast('Desecho anulado. Los ramos volvieron al inventario.');
     } catch (requestError) { toast(requestError.message); cancelWasteButton.disabled = false; }
+  }
+  if (cancelAdjustmentButton) {
+    const reason = window.prompt('Motivo para anular el ajuste y revertir su efecto en el inventario:');
+    if (reason === null) return;
+    if (!reason.trim()) return toast('Indique el motivo de la anulación.');
+    if (!window.confirm('¿Confirmar la anulación de este ajuste? Quedará registrada en el historial.')) return;
+    cancelAdjustmentButton.disabled = true;
+    try {
+      await api(`/api/inventory/reconciliation/${cancelAdjustmentButton.dataset.cancelAdjustment}/cancel`, { method: 'PUT', body: JSON.stringify({ reason: reason.trim() }) });
+      await refreshAll();
+      toast('Ajuste anulado. El inventario se actualizó.');
+    } catch (requestError) { toast(requestError.message); cancelAdjustmentButton.disabled = false; }
   }
   if (removeButton) { state.lines = state.lines.filter(row => row.key !== removeButton.dataset.removeLine); $('#remission-error').textContent = ''; renderLines(); }
   if (removePriceDraft) { state.priceDrafts.splice(Number(removePriceDraft.dataset.removePriceDraft), 1); renderPriceEntry(); }
