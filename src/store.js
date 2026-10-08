@@ -1208,6 +1208,22 @@ async function getRemission(id) {
   return mapRemission(header.rows[0], items);
 }
 
+async function updateRemissionNotes(id, input) {
+  const remissionId = Number(id);
+  const notes = String(input.notes ?? '').trim();
+  if (!Number.isSafeInteger(remissionId) || remissionId < 1) throw new Error('Remisión no válida.');
+  if (notes.length > 2000) throw new Error('La observación no puede superar 2000 caracteres.');
+  if (!usePostgres) {
+    const remission = memory.remissions.find(row => row.id === remissionId);
+    if (!remission || remission.status !== 'FINALIZADA') throw new Error('Solo se pueden editar observaciones de remisiones finalizadas.');
+    remission.notes = notes;
+    persistMemory(); return remission;
+  }
+  const updated = await pool.query("UPDATE remissions SET notes=$2 WHERE id=$1 AND status='FINALIZADA' RETURNING *", [remissionId, notes]);
+  if (!updated.rows[0]) throw new Error('Solo se pueden editar observaciones de remisiones finalizadas.');
+  return getRemission(remissionId);
+}
+
 async function dashboard() {
   const [inventory, remissions, todaySalesResult] = await Promise.all([
     listInventory(),
@@ -1357,4 +1373,4 @@ async function inventoryReport(from, to) {
   return { from: start, to: end, opening, closing };
 }
 
-module.exports = { init, listInventory, listInventoryAdjustments, reconcileInventory, cancelInventoryAdjustment, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, assignRemissionItems, setRemissionPrices, cancelRemission, renumberRemissions, listExportTransfers, createExportTransfer, cancelExportTransfer, listGradeTransfers, createGradeTransfer, listWaste, createWaste, cancelWaste, listRemissions, getRemission, dashboard, salesReport, wasteReport, movementsReport, inventoryReport, usePostgres };
+module.exports = { init, listInventory, listInventoryAdjustments, reconcileInventory, cancelInventoryAdjustment, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, assignRemissionItems, setRemissionPrices, updateRemissionNotes, cancelRemission, renumberRemissions, listExportTransfers, createExportTransfer, cancelExportTransfer, listGradeTransfers, createGradeTransfer, listWaste, createWaste, cancelWaste, listRemissions, getRemission, dashboard, salesReport, wasteReport, movementsReport, inventoryReport, usePostgres };

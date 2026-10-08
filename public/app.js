@@ -590,6 +590,7 @@ function renderDocument(data) {
     <div class="doc-company-contact"><span>${escapeHtml(company.companyAddress)}</span><span>${escapeHtml(company.companyPhone)}</span><span>${escapeHtml(company.companyEmail || '')}</span></div>
     <footer class="doc-approval"><div class="doc-signature-card"><div class="doc-signature-space"></div><strong>Firma de quien recibe la flor</strong><span>Nombre y documento</span></div><div class="doc-signature-card"><div class="doc-signature-space"></div><strong>Firma de quien recibe el pago</strong><span>Nombre, firma y documento</span></div></footer>`;
   const canEditPrices = data.status === 'FINALIZADA';
+  $('#edit-document-notes').classList.toggle('is-hidden', !canEditPrices || state.editingDocumentPrices);
   $('#edit-document-prices').classList.toggle('is-hidden', !canEditPrices || state.editingDocumentPrices);
   $('#save-document-prices').classList.toggle('is-hidden', !state.editingDocumentPrices);
   $('#cancel-document-prices').classList.toggle('is-hidden', !state.editingDocumentPrices);
@@ -979,6 +980,28 @@ $('#reports-access-form').addEventListener('submit', async event => {
 $('#generate-report').addEventListener('click', generateReport);
 $('#export-report').addEventListener('click', exportReport);
 $('#close-document').addEventListener('click', () => $('#remission-dialog').close());
+$('#edit-document-notes').addEventListener('click', () => {
+  const remission = state.activeRemission;
+  if (!remission || remission.status !== 'FINALIZADA') return;
+  $('#remission-notes-heading').textContent = `${remission.remissionNumber} · ${remission.clientName}`;
+  $('#remission-notes-input').value = remission.notes || '';
+  $('#remission-notes-error').textContent = '';
+  $('#remission-notes-dialog').showModal();
+});
+$('#remission-notes-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = event.submitter;
+  const error = $('#remission-notes-error'); error.textContent = '';
+  button.disabled = true;
+  try {
+    const remission = await api(`/api/remissions/${state.activeRemission.id}/notes`, { method: 'PUT', body: JSON.stringify({ notes: $('#remission-notes-input').value }) });
+    $('#remission-notes-dialog').close();
+    renderDocument(remission);
+    await refreshAll();
+    toast('Observación de la remisión actualizada.');
+  } catch (requestError) { error.textContent = requestError.message; }
+  finally { button.disabled = false; }
+});
 $('#edit-document-prices').addEventListener('click', () => {
   if (!state.activeRemission) return;
   state.editingDocumentPrices = true;
