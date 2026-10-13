@@ -101,22 +101,21 @@
           <details class="panel inventory-reconcile" id="inventory-reconcile-panel">
             <summary><strong>¿Necesitas corregir una diferencia de inventario?</strong><span>Ver opción de ajuste ▾</span></summary>
             <div class="inventory-reconcile-content">
-              <p>Seleccione el lote exacto. El ajuste cambia las existencias disponibles, pero conserva los escaneos, remisiones y traslados originales.</p>
+              <p>Seleccione el grado y la variedad para comparar todos sus ramos disponibles con el conteo físico. El sistema conservará el detalle de los lotes en el historial.</p>
               <form id="reconcile-form" class="reconcile-form">
                 <label>Grado<select id="reconcile-grade"><option value="">Seleccione un grado</option></select></label>
                 <label>Variedad<select id="reconcile-variety"><option value="">Seleccione una variedad</option></select></label>
-                <label class="reconcile-wide">Lote exacto · fecha y tallos por ramo<select id="reconcile-source" required><option value="">Seleccione un lote</option></select></label>
-                <label>Ramos en el sistema<input id="reconcile-current" type="number" readonly></label>
+                <label>Total de ramos en el sistema<input id="reconcile-current" type="number" readonly></label>
                 <label>Ramos contados físicamente<input id="reconcile-counted" type="number" min="0" step="1" required></label>
                 <label>Responsable<input id="reconcile-responsible" maxlength="160" required placeholder="Nombre de quien realizó el conteo"></label>
                 <label class="reconcile-wide">Motivo del ajuste<textarea id="reconcile-reason" maxlength="1000" rows="2" required placeholder="Explique por qué hay una diferencia"></textarea></label>
-                <div class="reconcile-wide reconcile-difference" id="reconcile-difference">Seleccione un lote para comparar el conteo.</div>
+                <div class="reconcile-wide reconcile-difference" id="reconcile-difference">Seleccione grado y variedad para comparar el conteo.</div>
                 <p class="form-error reconcile-wide" id="reconcile-error" role="alert"></p>
                 <button class="button button--dark reconcile-wide" type="submit">Registrar ajuste</button>
               </form>
             </div>
           </details>
-          <details class="panel inventory-reconcile" id="reconcile-history-panel"><summary><strong>Historial de ajustes</strong><span>Ver movimientos ▾</span></summary><div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Lote</th><th>Antes</th><th>Después</th><th>Diferencia</th><th>Responsable y motivo</th><th>Estado</th><th></th></tr></thead><tbody id="reconcile-history-body"></tbody></table></div><div class="empty-state is-hidden" id="reconcile-history-empty"><strong>Sin ajustes registrados</strong></div></details>
+          <details class="panel inventory-reconcile" id="reconcile-history-panel"><summary><strong>Historial de ajustes</strong><span>Ver movimientos ▾</span></summary><div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Variedad y grado</th><th>Antes</th><th>Después</th><th>Diferencia</th><th>Responsable y motivo</th><th>Estado</th><th></th></tr></thead><tbody id="reconcile-history-body"></tbody></table></div><div class="empty-state is-hidden" id="reconcile-history-empty"><strong>Sin ajustes registrados</strong></div></details>
           </div>
           <div class="inventory-operation inventory-operation--grade"><div class="inventory-operation-title"><span>03</span><div><h4>Cambio de grado</h4><p>Movimiento entre Nacional, Nacional granel y Bajas</p></div></div>
           <details class="panel inventory-reconcile transfer-panel" id="grade-transfer-panel"><summary><strong>Cambiar flor entre grados</strong><span>Ver formulario ▾</span></summary><div class="transfer-panel-content"><p>Traslade ramos entre Nacional, Nacional granel y Bajas sin modificar los escaneos. Se usan primero los lotes más antiguos y se guarda quién hizo el cambio.</p><form id="grade-transfer-form" class="transfer-form"><label>Grado de origen<select name="fromGrade" id="grade-transfer-from" required><option value="">Seleccione un grado</option><option value="NACIONAL">Nacional</option><option value="NACIONAL GRANEL">Nacional granel</option><option value="BAJAS">Bajas</option></select></label><label>Variedad<select name="variety" id="grade-transfer-variety" required><option value="">Seleccione una variedad</option></select></label><label>Grado de destino<select name="toGrade" id="grade-transfer-to" required><option value="">Seleccione un grado</option><option value="NACIONAL">Nacional</option><option value="NACIONAL GRANEL">Nacional granel</option><option value="BAJAS">Bajas</option></select></label><label>Ramos a trasladar<input name="bunches" type="number" min="1" step="1" required></label><label>Responsable<input name="responsible" maxlength="160" required placeholder="Nombre de quien realiza el cambio"></label><label>Motivo<input name="reason" maxlength="500" required placeholder="Ej. reclasificación por calidad"></label><p class="form-error reconcile-wide" id="grade-transfer-error" role="alert"></p><button class="button button--dark reconcile-wide" type="submit">Registrar cambio de grado</button></form></div></details>

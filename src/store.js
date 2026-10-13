@@ -224,10 +224,16 @@ async function init() {
       reason TEXT NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       canceled_at TIMESTAMPTZ,
-      cancellation_reason TEXT
+      cancellation_reason TEXT,
+      batch_id UUID,
+      group_before_bunches INTEGER,
+      group_counted_bunches INTEGER
     );
     ALTER TABLE inventory_adjustments ADD COLUMN IF NOT EXISTS canceled_at TIMESTAMPTZ;
     ALTER TABLE inventory_adjustments ADD COLUMN IF NOT EXISTS cancellation_reason TEXT;
+    ALTER TABLE inventory_adjustments ADD COLUMN IF NOT EXISTS batch_id UUID;
+    ALTER TABLE inventory_adjustments ADD COLUMN IF NOT EXISTS group_before_bunches INTEGER;
+    ALTER TABLE inventory_adjustments ADD COLUMN IF NOT EXISTS group_counted_bunches INTEGER;
     ALTER TABLE remission_items ALTER COLUMN inventory_id DROP NOT NULL;
     ALTER TABLE inventory ADD COLUMN IF NOT EXISTS color VARCHAR(80) NOT NULL DEFAULT '';
     ALTER TABLE inventory ADD COLUMN IF NOT EXISTS bunches INTEGER NOT NULL DEFAULT 0;
@@ -416,14 +422,14 @@ async function availableLot(client, lot) {
   return Number(row.scanned) + Number(row.incoming) - Number(row.outgoing) - Number(row.sold) - Number(row.exported) - Number(row.wasted) + Number(row.adjusted);
 }
 
-async function listInventoryAdjustments(limit = 100) {
+async function listInventoryAdjustments(limit = 1000) {
   if (!usePostgres) return [...memory.adjustments].reverse().slice(0, limit);
   const result = await pool.query('SELECT * FROM inventory_adjustments ORDER BY created_at DESC,id DESC LIMIT $1', [limit]);
   return result.rows.map(mapAdjustment);
 }
 
 function mapAdjustment(row) {
-  return { id: Number(row.id), date: dateOnly(row.source_date ?? row.date), variety: row.variety, gradeCm: row.grade_cm ?? row.gradeCm, stemsPerBunch: Number(row.stems_per_bunch ?? row.stemsPerBunch), beforeBunches: Number(row.before_bunches ?? row.beforeBunches), countedBunches: Number(row.counted_bunches ?? row.countedBunches), deltaBunches: Number(row.delta_bunches ?? row.deltaBunches), responsible: row.responsible, reason: row.reason, createdAt: row.created_at ?? row.createdAt, canceledAt: row.canceled_at ?? row.canceledAt ?? null, cancellationReason: row.cancellation_reason ?? row.cancellationReason ?? '' };
+  return { id: Number(row.id), batchId: row.batch_id ?? row.batchId ?? null, groupBeforeBunches: row.group_before_bunches ?? row.groupBeforeBunches ?? null, groupCountedBunches: row.group_counted_bunches ?? row.groupCountedBunches ?? null, date: dateOnly(row.source_date ?? row.date), variety: row.variety, gradeCm: row.grade_cm ?? row.gradeCm, stemsPerBunch: Number(row.stems_per_bunch ?? row.stemsPerBunch), beforeBunches: Number(row.before_bunches ?? row.beforeBunches), countedBunches: Number(row.counted_bunches ?? row.countedBunches), deltaBunches: Number(row.delta_bunches ?? row.deltaBunches), responsible: row.responsible, reason: row.reason, createdAt: row.created_at ?? row.createdAt, canceledAt: row.canceled_at ?? row.canceledAt ?? null, cancellationReason: row.cancellation_reason ?? row.cancellationReason ?? '' };
 }
 
 async function cancelInventoryAdjustment(id, input) {
@@ -434,12 +440,10 @@ async function cancelInventoryAdjustment(id, input) {
   if (!usePostgres) {
     const adjustment = memory.adjustments.find(row => row.id === adjustmentId);
     if (!adjustment || adjustment.canceledAt) throw new Error('Ajuste no encontrado o ya anulado.');
-    const stock = memory.inventory.find(row => dateOnly(row.date ?? row.updatedAt) === adjustment.date && normalizedText(row.variety) === normalizedText(adjustment.variety) && (row.gradeCm || 'NACIONAL') === adjustment.gradeCm && Number(row.stemsPerBunch) === adjustment.stemsPerBunch);
-    if (!stock) throw new Error('El lote original ya no está disponible.');
-    if (stock.bunches - adjustment.deltaBunches < 0) throw new Error('No se puede anular: los ramos agregados por el ajuste ya no están disponibles.');
-    stock.bunches -= adjustment.deltaBunches;
-    stock.stems -= adjustment.deltaBunches * adjustment.stemsPerBunch;
-    adjustment.canceledAt = new Date().toISOString(); adjustment.cancellationReason = reason;
+    const rows = adjustment.batchId ? memory.adjustments.filter(row => row.batchId === adjustment.batchId && !row.canceledAt) : [adjustment];
+    const stocks = rows.map(row => memory.inventory.find(stock => dateOnly(stock.date ?? stock.updatedAt) === row.date && normalizedText(stock.variety) === normalizedText(row.variety) && (stock.gradeCm || 'NACIONAL') === row.gradeCm && Number(stock.stemsPerBunch) === row.stemsPerBunch));
+    if (stocks.some((stock, index) => !stock || stock.bunches - rows[index].deltaBunches < 0)) throw new Error('No se puede anular: los ramos agregados por el ajuste ya no están disponibles.');
+    rows.forEach((row, index) => { stocks[index].bunches -= row.deltaBunches; stocks[index].stems -= row.deltaBunches * row.stemsPerBunch; row.canceledAt = new Date().toISOString(); row.cancellationReason = reason; });
     persistMemory(); return mapAdjustment(adjustment);
   }
   const client = await pool.connect();
@@ -448,17 +452,82 @@ async function cancelInventoryAdjustment(id, input) {
     const selected = await client.query('SELECT * FROM inventory_adjustments WHERE id=$1 FOR UPDATE', [adjustmentId]);
     const row = selected.rows[0];
     if (!row || row.canceled_at) throw new Error('Ajuste no encontrado o ya anulado.');
-    const lot = { date: dateOnly(row.source_date), variety: row.variety, gradeCm: row.grade_cm, stemsPerBunch: Number(row.stems_per_bunch) };
-    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [inventoryKey(lot)]);
-    const available = await availableLot(client, lot);
-    if (available - Number(row.delta_bunches) < 0) throw new Error('No se puede anular: los ramos agregados por el ajuste ya no están disponibles.');
-    const updated = await client.query('UPDATE inventory_adjustments SET canceled_at=NOW(),cancellation_reason=$2 WHERE id=$1 RETURNING *', [adjustmentId, reason]);
-    await client.query('COMMIT'); return mapAdjustment(updated.rows[0]);
+    const rows = row.batch_id ? (await client.query('SELECT * FROM inventory_adjustments WHERE batch_id=$1 ORDER BY id FOR UPDATE', [row.batch_id])).rows : [row];
+    if (rows.some(item => item.canceled_at)) throw new Error('Ajuste no encontrado o ya anulado.');
+    const lots = rows.map(item => ({ date: dateOnly(item.source_date), variety: item.variety, gradeCm: item.grade_cm, stemsPerBunch: Number(item.stems_per_bunch) }));
+    for (const key of [...new Set(lots.map(inventoryKey))].sort()) await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [key]);
+    for (let index = 0; index < rows.length; index++) {
+      const available = await availableLot(client, lots[index]);
+      if (available - Number(rows[index].delta_bunches) < 0) throw new Error('No se puede anular: los ramos agregados por el ajuste ya no están disponibles.');
+    }
+    const updated = row.batch_id
+      ? await client.query('UPDATE inventory_adjustments SET canceled_at=NOW(),cancellation_reason=$2 WHERE batch_id=$1 RETURNING *', [row.batch_id, reason])
+      : await client.query('UPDATE inventory_adjustments SET canceled_at=NOW(),cancellation_reason=$2 WHERE id=$1 RETURNING *', [adjustmentId, reason]);
+    await client.query('COMMIT'); return mapAdjustment(updated.rows.find(item => Number(item.id) === adjustmentId));
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
+}
+
+async function reconcileInventoryGroup(input) {
+  const variety = String(input.variety || '').trim();
+  const gradeCm = String(input.gradeCm || '').trim().toUpperCase();
+  const expectedBunches = Number(input.expectedBunches);
+  const countedBunches = Number(input.countedBunches);
+  const responsible = String(input.responsible || '').trim();
+  const reason = String(input.reason || '').trim();
+  if (!variety || !allowedGrades.includes(gradeCm)) throw new Error('Seleccione una variedad y un grado válidos.');
+  if (![expectedBunches, countedBunches].every(value => Number.isSafeInteger(value) && value >= 0)) throw new Error('Ingrese un conteo válido de ramos.');
+  if (!responsible || !reason) throw new Error('Responsable y motivo son obligatorios.');
+  if (expectedBunches === countedBunches) throw new Error('El conteo coincide con el sistema; no hay diferencia que registrar.');
+  const sources = (await listInventory(true)).filter(row => row.variety === variety && row.gradeCm === gradeCm);
+  if (!sources.length) throw new Error('No se encontró inventario de esta variedad y grado.');
+  sources.sort((a, b) => a.date.localeCompare(b.date) || a.stemsPerBunch - b.stemsPerBunch);
+  const batchId = randomUUID();
+  const makePlan = rows => {
+    const total = rows.reduce((sum, row) => sum + row.bunches, 0);
+    if (total !== expectedBunches) throw new Error('El inventario cambió. Actualice la página antes de conciliar.');
+    let remaining = Math.abs(countedBunches - total);
+    const plan = [];
+    if (countedBunches < total) {
+      for (const row of rows) {
+        const removed = Math.min(row.bunches, remaining);
+        if (removed) plan.push({ row, delta: -removed });
+        remaining -= removed;
+        if (!remaining) break;
+      }
+    } else plan.push({ row: rows[rows.length - 1], delta: remaining });
+    return plan;
+  };
+  if (!usePostgres) {
+    const plan = makePlan(sources);
+    const createdAt = new Date().toISOString();
+    const adjustments = plan.map(({ row, delta }) => {
+      const stock = memory.inventory.find(item => inventoryKey({ ...item, date: dateOnly(item.date ?? item.updatedAt), gradeCm: item.gradeCm || 'NACIONAL' }) === row.key);
+      if (!stock) throw new Error('El inventario cambió. Actualice la página antes de conciliar.');
+      return { stock, adjustment: { id: memory.nextAdjustmentId++, batchId, groupBeforeBunches: expectedBunches, groupCountedBunches: countedBunches, date: row.date, variety, gradeCm, stemsPerBunch: row.stemsPerBunch, beforeBunches: row.bunches, countedBunches: row.bunches + delta, deltaBunches: delta, responsible, reason, createdAt } };
+    });
+    for (const { stock, adjustment } of adjustments) { stock.bunches += adjustment.deltaBunches; stock.stems += adjustment.deltaBunches * adjustment.stemsPerBunch; memory.adjustments.push(adjustment); }
+    persistMemory();
+    return { batchId, variety, gradeCm, beforeBunches: expectedBunches, countedBunches };
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const key of [...new Set(sources.map(row => row.key))].sort()) await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [key]);
+    const latestSources = (await listInventory(true)).filter(row => row.variety === variety && row.gradeCm === gradeCm);
+    if (latestSources.length !== sources.length || latestSources.some(row => !sources.some(source => source.key === row.key))) throw new Error('El inventario cambió. Actualice la página antes de conciliar.');
+    const current = [];
+    for (const row of sources) current.push({ ...row, bunches: await availableLot(client, row) });
+    const plan = makePlan(current);
+    for (const { row, delta } of plan) await client.query(`INSERT INTO inventory_adjustments (source_date,variety,grade_cm,stems_per_bunch,before_bunches,counted_bunches,delta_bunches,responsible,reason,batch_id,group_before_bunches,group_counted_bunches) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, [row.date, variety, gradeCm, row.stemsPerBunch, row.bunches, row.bunches + delta, delta, responsible, reason, batchId, expectedBunches, countedBunches]);
+    await client.query('COMMIT');
+    return { batchId, variety, gradeCm, beforeBunches: expectedBunches, countedBunches };
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
 }
 
 async function reconcileInventory(input) {
+  if (!input.key) return reconcileInventoryGroup(input);
   const key = String(input.key || '');
   const source = decodeInventoryKey(key);
   const expectedBunches = Number(input.expectedBunches);
