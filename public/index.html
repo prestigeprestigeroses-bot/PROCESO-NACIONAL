@@ -182,7 +182,11 @@
                   </details>
                   <div class="remission-lines" id="remission-lines"></div>
                 </article>
-                <article class="panel form-panel notes-panel"><label>Observaciones<textarea name="notes" rows="3" placeholder="Indicaciones especiales para el despacho"></textarea></label></article>
+                <article class="panel form-panel notes-panel">
+                  <div class="notes-panel-heading"><span class="notes-panel-icon" aria-hidden="true">✎</span><div><h3>Observaciones de la remisión</h3><p>¿Hay indicaciones para este despacho? Escríbelas aquí antes de finalizar.</p></div></div>
+                  <label for="remission-notes">Observaciones (opcional)</label>
+                  <textarea id="remission-notes" name="notes" rows="4" maxlength="2000" placeholder="Ej. instrucciones de entrega, aclaraciones o condiciones especiales"></textarea>
+                </article>
               </div>
               <aside class="order-summary">
                 <div class="summary-head"><span>RESUMEN</span><strong id="summary-count">0 variedades</strong></div>
