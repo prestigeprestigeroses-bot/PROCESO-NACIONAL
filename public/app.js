@@ -441,19 +441,30 @@ function reportGroups(rows) {
 
 function renderReport() {
   const rows = state.reportRows.filter(row => !row.isDonation);
-  const donations = reportGroups(state.reportRows.filter(row => row.isDonation));
+  const donatedRows = state.reportRows.filter(row => row.isDonation);
+  const donations = reportGroups(donatedRows);
   const total = rows.reduce((sum, row) => sum + Number(row.subtotal || 0), 0);
   const bunches = rows.reduce((sum, row) => sum + Number(row.bunches || 0), 0);
   const stems = rows.reduce((sum, row) => sum + Number(row.stems || 0), 0);
+  const donatedBunches = donatedRows.reduce((sum, row) => sum + Number(row.bunches || 0), 0);
+  const donatedStems = donatedRows.reduce((sum, row) => sum + Number(row.stems || 0), 0);
   $('#report-money').textContent = money(total); $('#report-bunches').textContent = number(bunches); $('#report-stems').textContent = number(stems);
+  $('#report-delivered-stems').textContent = number(stems + donatedStems);
+  $('#report-donated-bunches').textContent = number(donatedBunches);
+  $('#report-donated-stems').textContent = number(donatedStems);
   $('#report-grades').innerHTML = ['NACIONAL', 'BAJAS', 'BAJAS GRANEL', 'NACIONAL GRANEL', '40', '50', '60', 'HOJA'].map(grade => {
     const subset = rows.filter(row => row.gradeCm === grade);
-    return `<article class="report-grade"><span>${grade === 'HOJA' ? 'EUCALIPTO · HOJA' : ['40', '50', '60'].includes(grade) ? `EXPORTACIÓN ${grade} CM` : escapeHtml(grade)}</span><strong>${number(subset.reduce((sum, row) => sum + Number(row.stems || 0), 0))} tallos</strong><small>${grade === 'HOJA' ? 'Precio por tallo' : `${number(subset.reduce((sum, row) => sum + Number(row.bunches || 0), 0))} ramos`} · ${money(subset.reduce((sum, row) => sum + Number(row.subtotal || 0), 0))}</small></article>`;
+    const gifted = donatedRows.filter(row => row.gradeCm === grade);
+    const soldStems = subset.reduce((sum, row) => sum + Number(row.stems || 0), 0);
+    const giftStems = gifted.reduce((sum, row) => sum + Number(row.stems || 0), 0);
+    return `<article class="report-grade"><span>${grade === 'HOJA' ? 'EUCALIPTO · HOJA' : ['40', '50', '60'].includes(grade) ? `EXPORTACIÓN ${grade} CM` : escapeHtml(grade)}</span><strong>${number(soldStems + giftStems)} tallos entregados</strong><small>${number(soldStems)} vendidos · ${number(giftStems)} donados · ${money(subset.reduce((sum, row) => sum + Number(row.subtotal || 0), 0))}</small></article>`;
   }).join('');
-  const groups = reportGroups(rows);
-  $('#report-body').innerHTML = groups.map(row => `<tr><td><strong>${escapeHtml(row.variety)}</strong></td><td><span class="grade-chip">${escapeHtml(row.gradeCm)}</span></td><td class="quantity">${number(row.bunches)}</td><td class="quantity">${number(row.stems)}</td><td class="money"><strong>${money(row.subtotal)}</strong></td></tr>`).join('');
+  const groups = reportGroups(state.reportRows);
+  const soldGroups = new Map(reportGroups(rows).map(row => [`${clientKey(row.variety)}|${row.gradeCm}`, row]));
+  const donatedGroups = new Map(donations.map(row => [`${clientKey(row.variety)}|${row.gradeCm}`, row]));
+  $('#report-body').innerHTML = groups.map(row => { const key = `${clientKey(row.variety)}|${row.gradeCm}`; const sold = soldGroups.get(key); const gifted = donatedGroups.get(key); return `<tr><td><strong>${escapeHtml(row.variety)}</strong></td><td><span class="grade-chip">${escapeHtml(row.gradeCm)}</span></td><td class="quantity">${number(sold?.bunches)}</td><td class="quantity">${number(sold?.stems)}</td><td class="quantity">${number(gifted?.bunches)}</td><td class="quantity">${number(gifted?.stems)}</td><td class="quantity"><strong>${number(row.stems)}</strong></td><td class="money"><strong>${money(sold?.subtotal)}</strong></td></tr>`; }).join('');
   $('#report-empty').classList.toggle('is-hidden', groups.length > 0);
-  if (!groups.length) $('#report-empty').innerHTML = '<strong>Sin ventas finalizadas</strong><span>No hay remisiones finalizadas en el período elegido.</span>';
+  if (!groups.length) $('#report-empty').innerHTML = '<strong>Sin salidas registradas</strong><span>No hay remisiones finalizadas en el período elegido.</span>';
   $('#report-donations-body').innerHTML = donations.map(row => `<tr><td><strong>${escapeHtml(row.variety)}</strong></td><td><span class="grade-chip">${escapeHtml(row.gradeCm)}</span></td><td class="quantity">${number(row.bunches)}</td><td class="quantity">${number(row.stems)}</td></tr>`).join('');
   $('#report-donations-empty').classList.toggle('is-hidden', donations.length > 0);
 }

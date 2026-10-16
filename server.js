@@ -118,17 +118,23 @@ app.get('/api/reports/sales.xlsx', requireReportsAccess, async (request, respons
     const rows = allRows.filter(row => !row.isDonation);
     const donations = allRows.filter(row => row.isDonation);
     const byVariety = new Map(); const byGrade = new Map();
-    rows.forEach(row => {
+    allRows.forEach(row => {
       const varietyKey = `${row.variety}|${row.gradeCm}`;
-      const variety = byVariety.get(varietyKey) || { Variedad: row.variety, Grado: row.gradeCm, Ramos: 0, Tallos: 0, 'Total COP': 0 };
-      variety.Ramos += row.bunches; variety.Tallos += row.stems; variety['Total COP'] += row.subtotal; byVariety.set(varietyKey, variety);
-      const grade = byGrade.get(row.gradeCm) || { Grado: row.gradeCm, Ramos: 0, Tallos: 0, 'Total COP': 0 };
-      grade.Ramos += row.bunches; grade.Tallos += row.stems; grade['Total COP'] += row.subtotal; byGrade.set(row.gradeCm, grade);
+      const variety = byVariety.get(varietyKey) || { Variedad: row.variety, Grado: row.gradeCm, 'Ramos vendidos': 0, 'Tallos vendidos': 0, 'Ramos donados': 0, 'Tallos donados': 0, 'Total ramos entregados': 0, 'Total tallos entregados': 0, 'Total vendido COP': 0 };
+      const grade = byGrade.get(row.gradeCm) || { Grado: row.gradeCm, 'Ramos vendidos': 0, 'Tallos vendidos': 0, 'Ramos donados': 0, 'Tallos donados': 0, 'Total ramos entregados': 0, 'Total tallos entregados': 0, 'Total vendido COP': 0 };
+      for (const group of [variety, grade]) {
+        group[row.isDonation ? 'Ramos donados' : 'Ramos vendidos'] += row.bunches;
+        group[row.isDonation ? 'Tallos donados' : 'Tallos vendidos'] += row.stems;
+        group['Total ramos entregados'] += row.bunches;
+        group['Total tallos entregados'] += row.stems;
+        group['Total vendido COP'] += row.subtotal;
+      }
+      byVariety.set(varietyKey, variety); byGrade.set(row.gradeCm, grade);
     });
     const total = rows.reduce((sum, row) => sum + row.subtotal, 0);
     const workbook = XLSX.utils.book_new();
     const sumStock = (items, field) => items.reduce((sum, row) => sum + Number(row[field] || 0), 0);
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([{ 'Desde': request.query.from, 'Hasta': request.query.to, 'Total vendido COP': total, 'Ramos vendidos': rows.reduce((sum, row) => sum + row.bunches, 0), 'Tallos vendidos': rows.reduce((sum, row) => sum + row.stems, 0), 'Ramos desechados': sumStock(waste, 'bunches'), 'Tallos desechados': sumStock(waste, 'stems'), 'Ramos inventario inicial': sumStock(inventory.opening, 'bunches'), 'Tallos inventario inicial': sumStock(inventory.opening, 'stems'), 'Ramos inventario final': sumStock(inventory.closing, 'bunches'), 'Tallos inventario final': sumStock(inventory.closing, 'stems') }]), 'Resumen');
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([{ 'Desde': request.query.from, 'Hasta': request.query.to, 'Total vendido COP': total, 'Ramos vendidos': sumStock(rows, 'bunches'), 'Tallos vendidos': sumStock(rows, 'stems'), 'Ramos donados': sumStock(donations, 'bunches'), 'Tallos donados': sumStock(donations, 'stems'), 'Total ramos entregados': sumStock(allRows, 'bunches'), 'Total tallos entregados': sumStock(allRows, 'stems'), 'Ramos desechados': sumStock(waste, 'bunches'), 'Tallos desechados': sumStock(waste, 'stems'), 'Ramos inventario inicial': sumStock(inventory.opening, 'bunches'), 'Tallos inventario inicial': sumStock(inventory.opening, 'stems'), 'Ramos inventario final': sumStock(inventory.closing, 'bunches'), 'Tallos inventario final': sumStock(inventory.closing, 'stems') }]), 'Resumen');
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([...byVariety.values()]), 'Por variedad');
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([...byGrade.values()]), 'Por grado');
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows.map(row => ({ Fecha: new Date(row.createdAt).toLocaleDateString('es-CO'), Remisión: row.remissionNumber, Cliente: row.clientName, Variedad: row.variety, Grado: row.gradeCm, Ramos: row.bunches, Tallos: row.stems, 'Unidad de precio': row.gradeCm === 'HOJA' ? 'Tallo' : 'Ramo', 'Precio unitario COP': row.gradeCm === 'HOJA' ? row.unitPriceStem : row.unitPriceBunch, 'Total COP': row.subtotal }))), 'Detalle remisiones');
