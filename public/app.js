@@ -439,6 +439,26 @@ function reportGroups(rows) {
   return [...groups.values()].sort((a, b) => a.variety.localeCompare(b.variety) || a.gradeCm.localeCompare(b.gradeCm));
 }
 
+function reportGradeBreakdown(rows) {
+  const varieties = new Map();
+  for (const row of rows) {
+    const key = clientKey(row.variety);
+    const item = varieties.get(key) || { variety: row.variety, soldStems: 0, donatedStems: 0 };
+    item[row.isDonation ? 'donatedStems' : 'soldStems'] += Number(row.stems || 0);
+    varieties.set(key, item);
+  }
+  const groups = [
+    { title: 'Rojo · Freedom', rows: [...varieties.values()].filter(row => clientKey(row.variety) === 'FREEDOM') },
+    { title: 'Color · demás variedades', rows: [...varieties.values()].filter(row => clientKey(row.variety) !== 'FREEDOM').sort((a, b) => a.variety.localeCompare(b.variety)) }
+  ];
+  if (!rows.length) return '<p class="report-grade-empty">No hubo ventas ni donaciones de este grado en el período.</p>';
+  return `<div class="report-grade-breakdown">${groups.map(group => {
+    const sold = group.rows.reduce((sum, row) => sum + row.soldStems, 0);
+    const donated = group.rows.reduce((sum, row) => sum + row.donatedStems, 0);
+    return `<section class="report-grade-group"><div class="report-grade-group-total"><b>${group.title}</b><strong>${number(sold)} tallos vendidos</strong><small>${number(donated)} donados · ${number(sold + donated)} entregados</small></div>${group.rows.length ? `<div class="report-grade-varieties">${group.rows.map(row => `<div class="report-grade-variety"><span>${escapeHtml(row.variety)}</span><b>${number(row.soldStems)} vendidos</b><small>${number(row.donatedStems)} donados</small></div>`).join('')}</div>` : ''}</section>`;
+  }).join('')}</div>`;
+}
+
 function renderReport() {
   const rows = state.reportRows.filter(row => !row.isDonation);
   const donatedRows = state.reportRows.filter(row => row.isDonation);
@@ -457,7 +477,7 @@ function renderReport() {
     const gifted = donatedRows.filter(row => row.gradeCm === grade);
     const soldStems = subset.reduce((sum, row) => sum + Number(row.stems || 0), 0);
     const giftStems = gifted.reduce((sum, row) => sum + Number(row.stems || 0), 0);
-    return `<article class="report-grade"><span>${grade === 'HOJA' ? 'EUCALIPTO · HOJA' : ['40', '50', '60'].includes(grade) ? `EXPORTACIÓN ${grade} CM` : escapeHtml(grade)}</span><strong>${number(soldStems + giftStems)} tallos entregados</strong><small>${number(soldStems)} vendidos · ${number(giftStems)} donados · ${money(subset.reduce((sum, row) => sum + Number(row.subtotal || 0), 0))}</small></article>`;
+    return `<details class="report-grade"><summary><span>${grade === 'HOJA' ? 'EUCALIPTO · HOJA' : ['40', '50', '60'].includes(grade) ? `EXPORTACIÓN ${grade} CM` : escapeHtml(grade)}</span><strong>${number(soldStems + giftStems)} tallos entregados</strong><small>${number(soldStems)} vendidos · ${number(giftStems)} donados · ${money(subset.reduce((sum, row) => sum + Number(row.subtotal || 0), 0))}</small><em>Ver variedades</em></summary>${reportGradeBreakdown([...subset, ...gifted])}</details>`;
   }).join('');
   const groups = reportGroups(state.reportRows);
   const soldGroups = new Map(reportGroups(rows).map(row => [`${clientKey(row.variety)}|${row.gradeCm}`, row]));
