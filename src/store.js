@@ -1266,6 +1266,24 @@ async function listRemissions(limit = 100) {
   return result.rows.map(row => mapRemission(row));
 }
 
+async function searchRemissions(query = '', limit = 50, offset = 0) {
+  const term = String(query || '').trim().slice(0, 160);
+  const pageSize = Math.min(Math.max(Number(limit) || 50, 1), 5000);
+  const start = Math.max(Number(offset) || 0, 0);
+  if (!Number.isSafeInteger(pageSize) || !Number.isSafeInteger(start)) throw new Error('Paginación no válida.');
+  if (!usePostgres) {
+    const matches = memory.remissions.filter(row => !term || [row.remissionNumber, row.originalRemissionNumber, row.clientName].some(value => String(value || '').toLocaleLowerCase('es-CO').includes(term.toLocaleLowerCase('es-CO'))));
+    const page = matches.slice(start, start + pageSize + 1);
+    return { rows: page.slice(0, pageSize), hasMore: page.length > pageSize };
+  }
+  const result = await pool.query(`SELECT * FROM remissions
+    WHERE $1='' OR COALESCE(remission_number,'') ILIKE '%' || $1 || '%'
+      OR COALESCE(original_remission_number,'') ILIKE '%' || $1 || '%'
+      OR client_name ILIKE '%' || $1 || '%'
+    ORDER BY created_at DESC,id DESC LIMIT $2 OFFSET $3`, [term, pageSize + 1, start]);
+  return { rows: result.rows.slice(0, pageSize).map(mapRemission), hasMore: result.rows.length > pageSize };
+}
+
 async function getRemission(id) {
   if (!usePostgres) return memory.remissions.find(row => row.id === Number(id)) || null;
   const [header, details] = await Promise.all([
@@ -1442,4 +1460,4 @@ async function inventoryReport(from, to) {
   return { from: start, to: end, opening, closing };
 }
 
-module.exports = { init, listInventory, listInventoryAdjustments, reconcileInventory, cancelInventoryAdjustment, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, assignRemissionItems, setRemissionPrices, updateRemissionNotes, cancelRemission, renumberRemissions, listExportTransfers, createExportTransfer, cancelExportTransfer, listGradeTransfers, createGradeTransfer, listWaste, createWaste, cancelWaste, listRemissions, getRemission, dashboard, salesReport, wasteReport, movementsReport, inventoryReport, usePostgres };
+module.exports = { init, listInventory, listInventoryAdjustments, reconcileInventory, cancelInventoryAdjustment, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, assignRemissionItems, setRemissionPrices, updateRemissionNotes, cancelRemission, renumberRemissions, listExportTransfers, createExportTransfer, cancelExportTransfer, listGradeTransfers, createGradeTransfer, listWaste, createWaste, cancelWaste, listRemissions, searchRemissions, getRemission, dashboard, salesReport, wasteReport, movementsReport, inventoryReport, usePostgres };

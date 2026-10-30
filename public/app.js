@@ -1,5 +1,5 @@
 const varieties = ['FREEDOM', 'PINK FLOYD', 'MONDIAL', 'HUMMER', 'MOMENTUM', 'CORAL REEF', 'QUICK SAND', 'HILUX', 'CANDLELIGHT', 'DEEP PURPLE', 'SUMMERSAND', 'STAR PLATINUM', 'SHIMMER', 'PINK OHARA', 'WHITE OHARA', 'PINK MONDIAL', 'BLESSING', 'PINK AMARETO', 'TIFFANY', 'YELLOW BIKINI', 'QUEEN BERRY', 'MOODY BLUE', 'SWAN', 'HIGH MAGIC', 'EXPLORER', 'DANCING RED', 'VENDELA'];
-const state = { inventory: [], inventoryFingerprint: '', inventoryRefreshPromise: null, inventoryLastSyncedAt: null, inventorySyncError: '', refreshVersion: 0, reconciliationSources: [], adjustments: [], remissions: [], prices: [], transfers: [], gradeTransfers: [], waste: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), selectedPriceGrades: new Map(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], wasteReport: [], movementsReport: { adjustments: [], transfers: [], gradeTransfers: [] }, inventoryReport: null, reportRange: '', stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
+const state = { inventory: [], inventoryFingerprint: '', inventoryRefreshPromise: null, inventoryLastSyncedAt: null, inventorySyncError: '', refreshVersion: 0, reconciliationSources: [], adjustments: [], remissions: [], historyRows: [], historyHasMore: false, historyVersion: 0, historyLoading: false, prices: [], transfers: [], gradeTransfers: [], waste: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), selectedPriceGrades: new Map(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], wasteReport: [], movementsReport: { adjustments: [], transfers: [], gradeTransfers: [] }, inventoryReport: null, reportRange: '', stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const money = value => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', currencyDisplay: 'code', maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -38,7 +38,7 @@ async function refreshAll() {
   await inventoryRefresh;
   if (version !== state.refreshVersion) return;
   const [dashboard, config, prices, transfers, reconciliation, waste, gradeTransfers] = results;
-  if (dashboard.status === 'fulfilled') { state.remissions = dashboard.value.remissions; state.totals = dashboard.value.totals; renderDashboard(); renderHistory(); }
+  if (dashboard.status === 'fulfilled') { state.remissions = dashboard.value.remissions; state.totals = dashboard.value.totals; renderDashboard(); }
   if (config.status === 'fulfilled') state.config = config.value;
   if (prices.status === 'fulfilled') { state.prices = normalizePriceList(prices.value); renderPrices(); }
   if (transfers.status === 'fulfilled') { state.transfers = transfers.value; renderTransfers(); }
@@ -286,10 +286,12 @@ function renderStockPreview() {
 }
 
 function renderHistory() {
-  const query = ($('#history-search').value || '').toLowerCase();
-  const rows = state.remissions.filter(item => `${item.remissionNumber || ''} ${item.clientName} ${item.deliveredBy}`.toLowerCase().includes(query));
-  $('#history-body').innerHTML = rows.map(item => { const meta = statusMeta(item.status); const cancelButton = item.status === 'ANULADA' ? '' : `<button class="small-button small-button--danger" data-cancel-remission="${item.id}">Anular</button>`; return `<tr><td><strong>${item.status === 'ANULADA' ? 'ANULADA' : escapeHtml(item.remissionNumber || 'Pendiente')}</strong></td><td>${dateTime(item.createdAt)}</td><td>${escapeHtml(item.clientName)}</td><td><strong>${bunchLabel(item.requestedBunches)}</strong> · ${number(item.requestedStems)} tallos</td><td><span class="workflow-status workflow-status--${meta.kind}">${meta.label}</span></td><td class="money"><strong>${item.status === 'FINALIZADA' ? money(item.total) : '—'}</strong></td><td><div class="table-actions"><button class="small-button" data-remission-action="${meta.action}" data-remission-id="${item.id}">${meta.button}</button>${cancelButton}</div></td></tr>`; }).join('');
-  $('#history-empty').classList.toggle('is-hidden', rows.length > 0);
+  const rows = state.historyRows;
+  $('#history-body').innerHTML = rows.map(item => { const meta = statusMeta(item.status); const cancelButton = item.status === 'ANULADA' ? '' : `<button class="small-button small-button--danger" data-cancel-remission="${item.id}">Anular</button>`; const numberLabel = item.status === 'ANULADA' ? `ANULADA${item.originalRemissionNumber ? `<br><small>Antes: ${escapeHtml(item.originalRemissionNumber)}</small>` : ''}` : escapeHtml(item.remissionNumber || 'Pendiente'); return `<tr><td><strong>${numberLabel}</strong></td><td>${dateTime(item.createdAt)}</td><td>${escapeHtml(item.clientName)}</td><td><strong>${bunchLabel(item.requestedBunches)}</strong> · ${number(item.requestedStems)} tallos</td><td><span class="workflow-status workflow-status--${meta.kind}">${meta.label}</span></td><td class="money"><strong>${item.status === 'FINALIZADA' ? money(item.total) : '—'}</strong></td><td><div class="table-actions"><button class="small-button" data-remission-action="${meta.action}" data-remission-id="${item.id}">${meta.button}</button>${cancelButton}</div></td></tr>`; }).join('');
+  $('#history-empty').classList.toggle('is-hidden', rows.length > 0 || state.historyLoading);
+  $('#history-count').textContent = state.historyLoading && !rows.length ? 'Buscando remisiones...' : rows.length ? `${number(rows.length)} remisiones cargadas${state.historyHasMore ? ' · hay más' : ''}` : '';
+  $('#history-load-more').classList.toggle('is-hidden', !state.historyHasMore);
+  $('#history-load-more').disabled = state.historyLoading;
 }
 
 function statusMeta(status) {
@@ -548,7 +550,34 @@ function exportReport() {
 }
 
 async function loadFullHistory(silent = false) {
-  try { state.remissions = await api('/api/remissions', { cache: 'no-store' }); renderHistory(); } catch (error) { if (!silent) toast(error.message); }
+  const version = ++state.historyVersion;
+  const limit = silent ? Math.max(50, state.historyRows.length) : 50;
+  state.historyLoading = true;
+  renderHistory();
+  try {
+    const query = new URLSearchParams({ q: $('#history-search').value.trim(), limit: String(limit), offset: '0' });
+    const result = await api(`/api/remissions/search?${query}`, { cache: 'no-store' });
+    if (version !== state.historyVersion) return;
+    state.historyRows = result.rows;
+    state.historyHasMore = result.hasMore;
+  } catch (error) { if (!silent) toast(error.message); }
+  finally { if (version === state.historyVersion) { state.historyLoading = false; renderHistory(); } }
+}
+
+async function loadMoreHistory() {
+  if (state.historyLoading || !state.historyHasMore) return;
+  const version = ++state.historyVersion;
+  state.historyLoading = true;
+  renderHistory();
+  try {
+    const query = new URLSearchParams({ q: $('#history-search').value.trim(), limit: '50', offset: String(state.historyRows.length) });
+    const result = await api(`/api/remissions/search?${query}`, { cache: 'no-store' });
+    if (version !== state.historyVersion) return;
+    const seen = new Set(state.historyRows.map(row => row.id));
+    state.historyRows.push(...result.rows.filter(row => !seen.has(row.id)));
+    state.historyHasMore = result.hasMore;
+  } catch (error) { toast(error.message); }
+  finally { if (version === state.historyVersion) { state.historyLoading = false; renderHistory(); } }
 }
 
 function toast(message) {
@@ -732,7 +761,17 @@ $('#waste-form').addEventListener('submit', async event => {
   } catch (requestError) { error.textContent = requestError.message; }
   finally { button.disabled = false; }
 });
-$('#history-search').addEventListener('input', renderHistory);
+let historySearchTimer;
+$('#history-search').addEventListener('input', () => {
+  clearTimeout(historySearchTimer);
+  state.historyVersion++;
+  state.historyRows = [];
+  state.historyHasMore = false;
+  state.historyLoading = true;
+  renderHistory();
+  historySearchTimer = setTimeout(() => loadFullHistory(), 300);
+});
+$('#history-load-more').addEventListener('click', loadMoreHistory);
 function setDateFilter(value) {
   state.selectedDate = value;
   $('#dashboard-date').value = value;
