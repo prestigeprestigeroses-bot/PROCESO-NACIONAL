@@ -9,7 +9,7 @@ const { Pool } = require('pg');
 const { listInventory } = require('./inventory');
 const whatsapp = require('./whatsapp');
 
-if (!process.env.DATABASE_URL) throw new Error('Configure DATABASE_URL en portal-clientes/.env');
+if (!process.env.DATABASE_URL) throw new Error('Configure DATABASE_URL en las variables del servicio o en portal-clientes/.env');
 const adminPassword = process.env.PORTAL_ADMIN_PASSWORD || process.env.APP_PASSWORD;
 const sessionSecret = process.env.PORTAL_SESSION_SECRET || process.env.SESSION_SECRET;
 if (!adminPassword || !sessionSecret) throw new Error('Configure PORTAL_ADMIN_PASSWORD y PORTAL_SESSION_SECRET.');
@@ -275,7 +275,8 @@ app.put('/api/admin/orders/:id', auth('admin'), async (req, res) => {
 });
 app.use((err, _req, res, _next) => fail(res, err, 500));
 init().then(() => {
-  app.listen(Number(process.env.PORTAL_PORT) || 3018, () => console.log(`Portal de clientes en http://127.0.0.1:${Number(process.env.PORTAL_PORT) || 3018}`));
+  const port = Number(process.env.PORT) || Number(process.env.PORTAL_PORT) || 3018;
+  app.listen(port, '0.0.0.0', () => console.log(`Portal de clientes escuchando en el puerto ${port}`));
   void processWhatsAppQueue();
   setInterval(() => { void processWhatsAppQueue(); }, 30000);
 }).catch(error => { console.error(error); process.exitCode = 1; });
