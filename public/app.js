@@ -120,7 +120,7 @@ function renderDashboard(totals = state.totals) {
     <td><div class="variety-cell">${escapeHtml(item.variety)}</div></td>
     <td><span class="grade-chip">${escapeHtml(item.gradeCm)}</span></td><td class="quantity">${number(item.stemsPerBunch)}</td>
     <td class="quantity">${number(item.bunches)}</td><td class="quantity">${number(item.stems)}</td>
-  </tr>`).join('') || '<tr><td colspan="5">No hay registros BAJAS, NACIONAL o NACIONAL GRANEL disponibles.</td></tr>';
+  </tr>`).join('') || '<tr><td colspan="5">No hay ramos disponibles en los grados del inventario.</td></tr>';
   $('#dashboard-remissions').innerHTML = state.remissions.slice(0, 6).map(item => `<button class="activity-item text-button" data-remission-action="${statusMeta(item.status).action}" data-remission-id="${item.id}">
     <span class="activity-icon">↗</span><span><strong>${escapeHtml(item.clientName)}</strong><span>${item.status === 'ANULADA' ? 'ANULADA' : escapeHtml(item.remissionNumber || 'Pendiente')} · ${statusMeta(item.status).label}</span></span><b class="activity-amount">${item.status === 'FINALIZADA' ? money(item.total) : bunchLabel(item.requestedBunches)}</b>
   </button>`).join('') || '<div class="empty-state"><strong>Aún no hay salidas</strong><span>La actividad aparecerá aquí.</span></div>';
@@ -280,7 +280,6 @@ function renderVarietyPicker(rows) {
 
 function renderStockPreview() {
   const item = remissionVarietyGroups().find(row => row.key === $('#line-variety').value);
-  $('#bajas-presentation-field').hidden = !item?.grades.has('BAJAS');
   if (!item) return $('#line-stock-preview').textContent = 'Seleccione una variedad para ver su disponibilidad.';
   $('#line-stock-preview').innerHTML = `<strong>${escapeHtml(item.variety)}</strong><span>${[...item.grades.entries()].map(([grade, bunches]) => `${escapeHtml(grade)}: <b>${number(bunches)} ramos</b>`).join(' · ')} · <b>${number(item.availableBunches)} ramos disponibles</b></span>`;
 }
@@ -334,7 +333,7 @@ function renderPrices() {
     groups.get(key).rows.push(row);
   });
   const cardColors = ['#176b57', '#265f99', '#7955a2', '#a05a28', '#9a3f58', '#28736e'];
-  const gradeOrder = ['NACIONAL', 'BAJAS', 'NACIONAL GRANEL', 'BAJAS GRANEL', '40', '50', '60', 'HOJA'];
+  const gradeOrder = ['NACIONAL', 'NACIONAL GRANEL', 'BAJAS', 'BAJAS GRANEL', '40', '50', '60', 'HOJA'];
   const gradeLabel = grade => grade === 'HOJA' ? 'Eucalipto · Hoja' : ['40', '50', '60'].includes(grade) ? `Exportación ${grade} cm` : grade === 'NACIONAL GRANEL' ? 'Nacional granel' : grade === 'BAJAS GRANEL' ? 'Bajas granel' : grade === 'BAJAS' ? 'Bajas' : 'Nacional';
   $('#price-list-body').innerHTML = [...groups.entries()].map(([key, group], index) => {
     const grades = gradeOrder.filter(grade => group.rows.some(row => row.gradeCm === grade));
@@ -593,7 +592,6 @@ function clearRemission() {
   $('#export-entry').open = false; $('#eucalyptus-entry').open = false;
   state.lines = []; state.stepGrade = 'ALL';
   $('#step-grade-filter').value = 'ALL';
-  $('#bajas-presentation').value = 'BAJAS';
   $('#line-bunches').value = 1;
   $('#export-bunches').value = 1; $('#export-stems').value = 25;
   $('#eucalyptus-stems').value = 25;
@@ -924,13 +922,11 @@ $('#add-line-button').addEventListener('click', () => {
   if (bunches > item.availableBunches) return error.textContent = `Disponibles: ${item.availableBunches} ramos.`;
   let pending = bunches;
   const sourceRows = state.inventory.filter(row => clientKey(row.variety) === item.key && (state.stepGrade === 'ALL' || row.gradeCm === state.stepGrade)).sort((a, b) => a.date.localeCompare(b.date));
-  const presentation = $('#bajas-presentation').value;
   const remainingFor = source => Math.max(0, source.bunches - state.lines.filter(row => (row.sourceKey || row.key) === source.key).reduce((sum, row) => sum + row.bunches, 0));
-  const saleGrade = source => source.gradeCm === 'BAJAS' ? presentation : source.gradeCm;
   const allocations = [];
   for (const source of sourceRows) {
     if (!pending) break;
-    const gradeCm = saleGrade(source);
+    const gradeCm = source.gradeCm;
     const available = remainingFor(source);
     if (!available) continue;
     const price = selectedPrice($('#remission-client-name').value, source.variety, gradeCm);
@@ -986,7 +982,7 @@ $('#remission-form').addEventListener('submit', async event => {
   const button = event.submitter;
   $('#remission-error').textContent = '';
   if (!state.lines.length) return $('#remission-error').textContent = 'Agregue al menos una variedad.';
-  const payload = { ...Object.fromEntries(new FormData(event.currentTarget)), items: state.lines.map(line => line.type === 'eucalyptus' ? { type: 'eucalyptus', stems: line.stems, isDonation: line.isDonation } : line.type === 'export' ? { type: 'export', variety: line.variety, gradeCm: line.gradeCm, stemsPerBunch: line.stemsPerBunch, bunches: line.bunches, isDonation: line.isDonation } : { key: line.sourceKey || line.key, presentation: line.gradeCm === 'BAJAS GRANEL' ? 'BAJAS GRANEL' : 'BAJAS', bunches: line.bunches, isDonation: line.isDonation }) };
+  const payload = { ...Object.fromEntries(new FormData(event.currentTarget)), items: state.lines.map(line => line.type === 'eucalyptus' ? { type: 'eucalyptus', stems: line.stems, isDonation: line.isDonation } : line.type === 'export' ? { type: 'export', variety: line.variety, gradeCm: line.gradeCm, stemsPerBunch: line.stemsPerBunch, bunches: line.bunches, isDonation: line.isDonation } : { key: line.sourceKey || line.key, bunches: line.bunches, isDonation: line.isDonation }) };
   button.disabled = true;
   try {
     const remission = await api('/api/remissions', { method: 'POST', body: JSON.stringify(payload) });

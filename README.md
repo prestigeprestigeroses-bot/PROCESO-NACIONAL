@@ -6,7 +6,7 @@ Aplicación web para controlar salidas nacionales de flor. Consulta existencias 
 
 - Inventario en tiempo real alimentado desde `public.scans`.
 - Agrupación por fecha, variedad, grado y cantidad de tallos por ramo.
-- Filtro exclusivo para los grados `BAJAS`, `NACIONAL` y `NACIONAL GRANEL`.
+- Filtro para los grados `BAJAS`, `BAJAS GRANEL`, `NACIONAL` y `NACIONAL GRANEL`.
 - Número de ramos calculado con `COUNT(*)` y total de tallos con `SUM(tallos)`.
 - Selectores de fecha y grado sincronizados entre Resumen e Inventario.
 - Creación completa en un solo paso con cliente, variedades, grados, precios y observaciones.
