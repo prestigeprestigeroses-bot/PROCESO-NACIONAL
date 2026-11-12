@@ -1,0 +1,15 @@
+.color-picker { max-width: 520px; margin-bottom: 15px; position: relative; }
+.picker-label { display: block; font-size: 14px; font-weight: 700; margin-bottom: 7px; }
+.color-picker details { position: relative; }
+.color-picker summary { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 55px; padding: 12px 15px; background: white; border: 2px solid #d5b3bf; border-radius: 10px; font-weight: 700; cursor: pointer; list-style: none; }
+.color-picker summary::-webkit-details-marker { display: none; }
+.color-picker summary span:last-child { margin-left: auto; font-size: 21px; }
+.color-picker summary .swatch, .color-option .swatch { flex: 0 0 21px; height: 21px; width: 21px; }
+.color-options { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 4; max-height: min(360px, 55vh); overflow-y: auto; background: white; border: 1px solid #d5b3bf; border-radius: 10px; box-shadow: 0 12px 30px #36132435; padding: 5px; }
+.color-option { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 44px; padding: 9px 12px; border: 0; border-radius: 7px; text-align: left; font: inherit; font-weight: 700; color: #281e23; cursor: pointer; margin: 2px 0; }
+.color-option:hover, .color-option:focus-visible { outline: 2px solid #8c173d; outline-offset: -2px; filter: saturate(1.2); }
+.color-option.assorted { border-top: 2px solid #bba9b4; margin-top: 8px; background-image: linear-gradient(90deg, #ffe4e8, #fff4c9, #e0f1e7, #eee4fa); }
+.item-list .color-item { border-radius: 7px; font-weight: 700; }
+.highlighted-order { border-color: #8c173d; box-shadow: 0 0 0 3px #8c173d33; }
+.notice-state { background: #fff6dc; color: #725306; border: 1px solid #ecd49b; border-radius: 10px; padding: 12px 15px; font-size: 13px; margin: 16px 0 0; }
+.notice-status { font-size: 12px; margin: 0 0 12px; }
