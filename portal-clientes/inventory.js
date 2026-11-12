@@ -21,12 +21,12 @@ WITH scanned AS (
     FROM inventory_grade_transfers GROUP BY source_date,variety,to_grade,stems_per_bunch
   ) entries GROUP BY source_date,variety,grade_cm,stems_per_bunch
 ), used AS (
-  SELECT source_date,variety,CASE WHEN grade_cm='BAJAS GRANEL' THEN 'BAJAS' ELSE grade_cm END AS grade_cm,
+  SELECT source_date,variety,COALESCE(source_grade_cm,grade_cm) AS grade_cm,
          stems_per_bunch, COALESCE(SUM(bunches),0)::int AS used_bunches,
          COALESCE(SUM(stems),0)::int AS used_stems
   FROM remission_items ri JOIN remissions r ON r.id=ri.remission_id
   WHERE source_date IS NOT NULL AND r.status <> 'ANULADA'
-  GROUP BY source_date,variety,CASE WHEN grade_cm='BAJAS GRANEL' THEN 'BAJAS' ELSE grade_cm END,stems_per_bunch
+  GROUP BY source_date,variety,COALESCE(source_grade_cm,grade_cm),stems_per_bunch
 ), adjusted AS (
   SELECT source_date,variety,grade_cm,stems_per_bunch,SUM(delta_bunches)::int AS delta_bunches
   FROM inventory_adjustments WHERE canceled_at IS NULL
@@ -64,7 +64,7 @@ WHERE source.source_bunches-COALESCE(used.used_bunches,0)
   -COALESCE(regraded.bunches,0)-COALESCE(discarded.waste_bunches,0)+COALESCE(adjusted.delta_bunches,0) > 0`;
 
 async function listInventory(pool) {
-  const { rows } = await pool.query(query, [['BAJAS', 'NACIONAL', 'NACIONAL GRANEL'], '2026-09-21']);
+  const { rows } = await pool.query(query, [['BAJAS', 'BAJAS GRANEL', 'NACIONAL', 'NACIONAL GRANEL'], '2026-09-21']);
   return rows.map(row => ({ variety: row.variety, gradeCm: row.grade_cm, stemsPerBunch: Number(row.stems_per_bunch), bunches: Number(row.bunches), stems: Number(row.stems) }));
 }
 module.exports = { listInventory };

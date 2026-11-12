@@ -22,5 +22,5 @@ Cada pedido nuevo queda en la cola `portal_whatsapp_notifications`. Si Meta rech
 
 - Sin cuenta de WhatsApp Business Platform, número remitente, plantilla aprobada y dirección pública HTTPS, el envío automático no se puede activar. La aprobación se hace en el portal móvil al abrir el enlace del mensaje, no escribiendo «aprobar» en la conversación.
 - El pedido aprobado **no crea una remisión ni descuenta o reserva inventario**. El inventario se vuelve a comprobar al aprobar. El personal debe registrar la remisión en el programa principal para descontar la flor; si cambia el inventario entre aprobación y remisión, hay que coordinar con el cliente.
-- Bajas y Bajas granel comparten el mismo inventario físico. El portal valida ambas cantidades juntas. El precio mostrado es por ramo, incluidos los grados granel.
+- Bajas y Bajas granel son grados de inventario independientes. El portal valida cada grado por separado. El precio mostrado es por ramo, incluidos los grados granel.
 - Las variedades que no estén en la tabla de colores proporcionada no se muestran. Los nombres alternativos `QUICKSAND`/`QUICK SAND`, `SOMMERSAND`/`SUMMERSAND` y `MOODY BLUE`/`MOODY BLUES` se agrupan en el mismo color.

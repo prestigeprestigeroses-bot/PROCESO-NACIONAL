@@ -76,10 +76,8 @@ function summarize(lots) {
   for (const lot of lots) {
     const color = colorOf.get(norm(lot.variety));
     if (!color || !result[color].grades[lot.gradeCm]) continue;
-    for (const grade of lot.gradeCm === 'BAJAS' ? ['BAJAS', 'BAJAS GRANEL'] : [lot.gradeCm]) {
-      result[color].grades[grade].bunches += lot.bunches;
-      result[color].grades[grade].stems += lot.stems;
-    }
+    result[color].grades[lot.gradeCm].bunches += lot.bunches;
+    result[color].grades[lot.gradeCm].stems += lot.stems;
   }
   for (const color of assortedColors) {
     for (const grade of grades) {
@@ -98,20 +96,15 @@ function validateAvailability(items, catalog) {
   const amount = (color, grade) => requested.get(`${color}|${grade}`) || 0;
   for (const color of regularColors) {
     const stock = catalog.find(row => row.color === color).grades;
-    for (const grade of ['NACIONAL', 'NACIONAL GRANEL']) {
+    for (const grade of grades) {
       if (amount(color, grade) > stock[grade].bunches) throw new Error(`Inventario insuficiente de ${color} · ${grade}.`);
-    }
-    if (amount(color, 'BAJAS') + amount(color, 'BAJAS GRANEL') > stock.BAJAS.bunches) {
-      throw new Error(`Inventario insuficiente de ${color} · BAJAS.`);
     }
   }
   const totalStock = catalog.find(row => row.color === assortedColor).grades;
-  for (const grade of ['NACIONAL', 'NACIONAL GRANEL']) {
+  for (const grade of grades) {
     const total = assortedColors.reduce((sum, color) => sum + amount(color, grade), amount(assortedColor, grade));
     if (total > totalStock[grade].bunches) throw new Error(`No hay suficientes ramos para combinar colores surtidos y ${grade}.`);
   }
-  const totalBajas = [...assortedColors, assortedColor].reduce((sum, color) => sum + amount(color, 'BAJAS') + amount(color, 'BAJAS GRANEL'), 0);
-  if (totalBajas > totalStock.BAJAS.bunches) throw new Error('No hay suficientes ramos de bajas para combinar colores surtidos e individuales.');
 }
 async function availability() { return summarize(await listInventory(pool)); }
 function customerWhatsAppUrl(order, items) {
