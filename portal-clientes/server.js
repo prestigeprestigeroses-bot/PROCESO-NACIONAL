@@ -246,6 +246,27 @@ app.get('/api/admin', auth('admin'), async (_req, res) => {
 app.post('/api/admin/customers', auth('admin'), async (req, res) => {
   try { const name = String(req.body.name || '').trim(), phone = String(req.body.phone || '').trim(), password = String(req.body.password || ''); if (!name || !/^\+?\d{10,15}$/.test(phone) || password.length < 8) throw new Error('Ingrese nombre, teléfono internacional y una clave de 8 caracteres o más.'); const { rows } = await pool.query('INSERT INTO portal_customers(name,phone,password_hash) VALUES($1,$2,$3) RETURNING id,name,phone', [name, phone, hashPassword(password)]); res.status(201).json(rows[0]); } catch (e) { fail(res, e); }
 });
+app.put('/api/admin/customers/:id', auth('admin'), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const name = String(req.body.name || '').trim();
+    const phone = String(req.body.phone || '').trim();
+    const password = String(req.body.password || '');
+    if (!Number.isSafeInteger(id) || id < 1) throw new Error('Cliente no válido.');
+    if (!name || name.length > 160 || !/^\+?\d{10,15}$/.test(phone)) throw new Error('Ingrese nombre y teléfono internacional válidos.');
+    if (password && password.length < 8) throw new Error('La nueva clave debe tener al menos 8 caracteres.');
+    const result = await pool.query(
+      `UPDATE portal_customers SET name=$1,phone=$2,password_hash=COALESCE($3,password_hash)
+       WHERE id=$4 RETURNING id,name,phone,active`,
+      [name, phone, password ? hashPassword(password) : null, id]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: 'Cliente no encontrado.' });
+    res.json(result.rows[0]);
+  } catch (error) {
+    if (error.code === '23505') return res.status(409).json({ error: 'Ese teléfono ya está asignado a otro cliente.' });
+    fail(res, error);
+  }
+});
 app.put('/api/admin/prices', auth('admin'), async (req, res) => {
   try { for (const grade of grades) { const value = Number(req.body[grade]); if (!Number.isSafeInteger(value) || value < 1 || value > 100000000) throw new Error(`Precio inválido para ${grade}.`); } for (const grade of grades) await pool.query('UPDATE portal_prices SET price_per_bunch=$1,updated_at=NOW() WHERE grade=$2', [req.body[grade], grade]); res.json({ prices: await prices() }); } catch (e) { fail(res, e); }
 });
