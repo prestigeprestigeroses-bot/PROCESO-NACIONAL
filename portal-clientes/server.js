@@ -16,7 +16,7 @@ if (!adminPassword || !sessionSecret) throw new Error('Configure PORTAL_ADMIN_PA
 const app = express();
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false });
 const secret = sessionSecret;
-const grades = ['NACIONAL', 'BAJAS', 'NACIONAL GRANEL', 'BAJAS GRANEL'];
+const grades = ['NACIONAL', 'BAJAS', 'NACIONAL GRANEL', 'BAJAS GRANEL', 'EXPORTACION GRANEL'];
 const colorGroups = [
   ['ROJOS', ['FREEDOM', 'EXPLORER']],
   ['BLANCOS', ['VENDELA', 'MONDIAL', 'CANDLELIGHT', 'WHITE OHARA']],
@@ -108,11 +108,13 @@ function validateAvailability(items, catalog) {
   for (const color of regularColors) {
     const stock = catalog.find(row => row.color === color).grades;
     for (const grade of grades) {
+      if (grade === 'EXPORTACION GRANEL') continue;
       if (amount(color, grade) > stock[grade].bunches) throw new Error(`Inventario insuficiente de ${color} · ${grade}.`);
     }
   }
   const totalStock = catalog.find(row => row.color === assortedColor).grades;
   for (const grade of grades) {
+    if (grade === 'EXPORTACION GRANEL') continue;
     const total = assortedColors.reduce((sum, color) => sum + amount(color, grade), amount(assortedColor, grade));
     if (total > totalStock[grade].bunches) throw new Error(`No hay suficientes ramos para combinar colores surtidos y ${grade}.`);
   }
@@ -188,6 +190,7 @@ async function init() {
       await pool.query('INSERT INTO portal_prices(grade,price_per_bunch) VALUES($1,$2) ON CONFLICT DO NOTHING', [grade, price]);
     }
   }
+  await pool.query("INSERT INTO portal_prices(grade,price_per_bunch) VALUES('EXPORTACION GRANEL',9000) ON CONFLICT DO NOTHING");
 }
 app.get('/api/session', async (req, res) => {
   try { const s = session(req); if (!s) return res.json({ role: null }); if (s.role === 'admin') return res.json({ role: 'admin' }); const { rows } = await pool.query('SELECT id,name FROM portal_customers WHERE id=$1 AND active=TRUE', [s.id]); res.json(rows[0] ? { role: 'customer', name: rows[0].name } : { role: null }); } catch (e) { fail(res, e, 500); }
