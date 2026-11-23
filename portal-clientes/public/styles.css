@@ -12,6 +12,7 @@
 .admin-section--customers .customer-row{background:#f7fcf8;border-color:#c6dfcf;box-shadow:0 3px 10px #20533c0b}
 .admin-section--customers .customer-row .secondary{color:#20533c;border-color:#9ac8ad;background:#e6f4ea}
 .admin-section--customers .customer-row .secondary:hover{background:#d4ebdc}
+.customer-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end}.customer-actions button{padding:9px 13px;font-size:13px;white-space:nowrap}
 .admin-section--orders{background:linear-gradient(135deg,#fce9ef,#f9f0e9);border-color:#edc8d5;border-left:6px solid #a23b60}
 .admin-section--orders h2{color:#702341}
 .admin-section--orders .order-card{background:#fff9fa;border-color:#eacbd5;box-shadow:0 4px 14px #7023410b}

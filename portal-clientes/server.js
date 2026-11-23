@@ -36,6 +36,7 @@ const colors = [...regularColors, assortedColor];
 const colorOf = new Map(colorGroups.flatMap(([color, names]) => names.map(name => [name, color])));
 const norm = value => String(value || '').trim().replace(/\s+/g, ' ').toUpperCase();
 const money = value => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(value);
+const loginFailures = new Map();
 
 app.disable('x-powered-by');
 app.use(express.json({ limit: '30kb' }));
@@ -67,7 +68,17 @@ function session(req) {
     return data.expires > Date.now() ? data : null;
   } catch { return null; }
 }
-function auth(role) { return (req, res, next) => { req.session = session(req); if (req.session?.role !== role) return res.status(401).json({ error: 'Inicia sesión para continuar.' }); next(); }; }
+function auth(role) { return async (req, res, next) => {
+  req.session = session(req);
+  if (req.session?.role !== role) return res.status(401).json({ error: 'Inicia sesión para continuar.' });
+  if (role === 'customer') {
+    try {
+      const { rowCount } = await pool.query('SELECT 1 FROM portal_customers WHERE id=$1 AND active=TRUE', [req.session.id]);
+      if (!rowCount) return res.status(401).json({ error: 'La cuenta de cliente ya no está activa.' });
+    } catch (error) { return fail(res, error, 500); }
+  }
+  next();
+}; }
 function setSession(res, value) { res.setHeader('Set-Cookie', `portal_session=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`); }
 function fail(res, error, code = 400) { res.status(code).json({ error: error.message || String(error) }); }
 async function prices() { const { rows } = await pool.query('SELECT grade, price_per_bunch FROM portal_prices ORDER BY grade'); return Object.fromEntries(rows.map(row => [row.grade, Number(row.price_per_bunch)])); }
@@ -184,8 +195,18 @@ app.get('/api/session', async (req, res) => {
 app.post('/api/login', async (req, res) => {
   try {
     if (req.body.role === 'admin') { if (!secureEqual(req.body.password, adminPassword)) throw new Error('Clave incorrecta.'); setSession(res, token('admin', 0)); return res.json({ role: 'admin' }); }
-    const { rows } = await pool.query('SELECT * FROM portal_customers WHERE phone=$1 AND active=TRUE', [String(req.body.phone || '').trim()]);
-    if (!rows[0] || !matchPassword(String(req.body.password || ''), rows[0].password_hash)) throw new Error('Teléfono o clave incorrectos.');
+    const phone = String(req.body.phone || '').trim();
+    const failureKey = `${req.ip}:${phone}`;
+    const failure = loginFailures.get(failureKey);
+    if (failure && failure.until > Date.now() && failure.count >= 5) return res.status(429).json({ error: 'Demasiados intentos. Espera 15 minutos antes de volver a ingresar.' });
+    const { rows } = await pool.query('SELECT * FROM portal_customers WHERE phone=$1 AND active=TRUE', [phone]);
+    if (!rows[0] || !matchPassword(String(req.body.password || ''), rows[0].password_hash)) {
+      const count = failure && failure.until > Date.now() ? failure.count + 1 : 1;
+      if (loginFailures.size > 10000) loginFailures.clear();
+      loginFailures.set(failureKey, { count, until: Date.now() + 15 * 60 * 1000 });
+      throw new Error('Teléfono o clave incorrectos.');
+    }
+    loginFailures.delete(failureKey);
     setSession(res, token('customer', rows[0].id)); res.json({ role: 'customer', name: rows[0].name });
   } catch (e) { fail(res, e, 401); }
 });
@@ -223,13 +244,13 @@ app.get('/api/admin', auth('admin'), async (_req, res) => {
   try {
     const [orders, customers, p] = await Promise.all([
       pool.query(`SELECT o.*,c.name,c.phone,(SELECT n.status FROM portal_whatsapp_notifications n WHERE n.order_id=o.id) AS whatsapp_status,COALESCE(json_agg(json_build_object('color',i.color,'grade',i.grade,'bunches',i.bunches,'subtotal',i.subtotal)) FILTER (WHERE i.id IS NOT NULL),'[]') AS items FROM portal_orders o JOIN portal_customers c ON c.id=o.customer_id LEFT JOIN portal_order_items i ON i.order_id=o.id GROUP BY o.id,c.id ORDER BY o.id DESC LIMIT 100`),
-      pool.query('SELECT id,name,phone,active FROM portal_customers ORDER BY name'), prices()
+      pool.query('SELECT c.id,c.name,c.phone,c.active,(SELECT COUNT(*)::int FROM portal_orders o WHERE o.customer_id=c.id) AS order_count FROM portal_customers c ORDER BY c.name'), prices()
     ]);
     res.json({ orders: orders.rows, customers: customers.rows, prices: p, automaticWhatsApp: Boolean(whatsapp.config()), whatsappConfigurationIssues: whatsapp.configurationIssues() });
   } catch (e) { fail(res, e, 500); }
 });
 app.post('/api/admin/customers', auth('admin'), async (req, res) => {
-  try { const name = String(req.body.name || '').trim(), phone = String(req.body.phone || '').trim(), password = String(req.body.password || ''); if (!name || !/^\+?\d{10,15}$/.test(phone) || password.length < 8) throw new Error('Ingrese nombre, teléfono internacional y una clave de 8 caracteres o más.'); const { rows } = await pool.query('INSERT INTO portal_customers(name,phone,password_hash) VALUES($1,$2,$3) RETURNING id,name,phone', [name, phone, hashPassword(password)]); res.status(201).json(rows[0]); } catch (e) { fail(res, e); }
+  try { const name = String(req.body.name || '').trim(), phone = String(req.body.phone || '').trim(), password = String(req.body.password || ''); if (!name || !/^\+?\d{10,15}$/.test(phone) || password.length !== 4) throw new Error('Ingrese nombre, teléfono internacional y una clave de exactamente 4 caracteres.'); const { rows } = await pool.query('INSERT INTO portal_customers(name,phone,password_hash) VALUES($1,$2,$3) RETURNING id,name,phone', [name, phone, hashPassword(password)]); res.status(201).json(rows[0]); } catch (e) { fail(res, e); }
 });
 app.put('/api/admin/customers/:id', auth('admin'), async (req, res) => {
   try {
@@ -239,7 +260,7 @@ app.put('/api/admin/customers/:id', auth('admin'), async (req, res) => {
     const password = String(req.body.password || '');
     if (!Number.isSafeInteger(id) || id < 1) throw new Error('Cliente no válido.');
     if (!name || name.length > 160 || !/^\+?\d{10,15}$/.test(phone)) throw new Error('Ingrese nombre y teléfono internacional válidos.');
-    if (password && password.length < 8) throw new Error('La nueva clave debe tener al menos 8 caracteres.');
+    if (password && password.length !== 4) throw new Error('La nueva clave debe tener exactamente 4 caracteres.');
     const result = await pool.query(
       `UPDATE portal_customers SET name=$1,phone=$2,password_hash=COALESCE($3,password_hash)
        WHERE id=$4 RETURNING id,name,phone,active`,
@@ -252,8 +273,37 @@ app.put('/api/admin/customers/:id', auth('admin'), async (req, res) => {
     fail(res, error);
   }
 });
+app.delete('/api/admin/customers/:id', auth('admin'), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ error: 'Cliente no válido.' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const found = await client.query('SELECT id FROM portal_customers WHERE id=$1 FOR UPDATE', [id]);
+    if (!found.rowCount) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Cliente no encontrado.' }); }
+    await client.query('DELETE FROM portal_order_items WHERE order_id IN (SELECT id FROM portal_orders WHERE customer_id=$1)', [id]);
+    await client.query('DELETE FROM portal_orders WHERE customer_id=$1', [id]);
+    await client.query('DELETE FROM portal_customers WHERE id=$1', [id]);
+    await client.query('COMMIT');
+    res.json({ deleted: true });
+  } catch (error) { await client.query('ROLLBACK'); fail(res, error, 500); } finally { client.release(); }
+});
 app.put('/api/admin/prices', auth('admin'), async (req, res) => {
   try { for (const grade of grades) { const value = Number(req.body[grade]); if (!Number.isSafeInteger(value) || value < 1 || value > 100000000) throw new Error(`Precio inválido para ${grade}.`); } for (const grade of grades) await pool.query('UPDATE portal_prices SET price_per_bunch=$1,updated_at=NOW() WHERE grade=$2', [req.body[grade], grade]); res.json({ prices: await prices() }); } catch (e) { fail(res, e); }
+});
+app.delete('/api/admin/orders/:id', auth('admin'), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ error: 'Pedido no válido.' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const found = await client.query('SELECT id FROM portal_orders WHERE id=$1 FOR UPDATE', [id]);
+    if (!found.rowCount) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Pedido no encontrado.' }); }
+    await client.query('DELETE FROM portal_order_items WHERE order_id=$1', [id]);
+    await client.query('DELETE FROM portal_orders WHERE id=$1', [id]);
+    await client.query('COMMIT');
+    res.json({ deleted: true });
+  } catch (error) { await client.query('ROLLBACK'); fail(res, error, 500); } finally { client.release(); }
 });
 app.put('/api/admin/orders/:id', auth('admin'), async (req, res) => {
   const client = await pool.connect();
