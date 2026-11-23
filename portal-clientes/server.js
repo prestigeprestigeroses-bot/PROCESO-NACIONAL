@@ -225,7 +225,7 @@ app.get('/api/admin', auth('admin'), async (_req, res) => {
       pool.query(`SELECT o.*,c.name,c.phone,(SELECT n.status FROM portal_whatsapp_notifications n WHERE n.order_id=o.id) AS whatsapp_status,COALESCE(json_agg(json_build_object('color',i.color,'grade',i.grade,'bunches',i.bunches,'subtotal',i.subtotal)) FILTER (WHERE i.id IS NOT NULL),'[]') AS items FROM portal_orders o JOIN portal_customers c ON c.id=o.customer_id LEFT JOIN portal_order_items i ON i.order_id=o.id GROUP BY o.id,c.id ORDER BY o.id DESC LIMIT 100`),
       pool.query('SELECT id,name,phone,active FROM portal_customers ORDER BY name'), prices()
     ]);
-    res.json({ orders: orders.rows, customers: customers.rows, prices: p, automaticWhatsApp: Boolean(whatsapp.config()) });
+    res.json({ orders: orders.rows, customers: customers.rows, prices: p, automaticWhatsApp: Boolean(whatsapp.config()), whatsappConfigurationIssues: whatsapp.configurationIssues() });
   } catch (e) { fail(res, e, 500); }
 });
 app.post('/api/admin/customers', auth('admin'), async (req, res) => {

@@ -1,5 +1,24 @@
 const adminPhone = String(process.env.WHATSAPP_ADMIN_PHONE || '573002543548').replace(/\D/g, '');
 
+function configurationIssues() {
+  const values = {
+    WHATSAPP_PHONE_NUMBER_ID: String(process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim(),
+    WHATSAPP_ACCESS_TOKEN: String(process.env.WHATSAPP_ACCESS_TOKEN || '').trim(),
+    WHATSAPP_GRAPH_VERSION: String(process.env.WHATSAPP_GRAPH_VERSION || '').trim(),
+    WHATSAPP_TEMPLATE_NAME: String(process.env.WHATSAPP_TEMPLATE_NAME || '').trim(),
+    WHATSAPP_TEMPLATE_LANGUAGE: String(process.env.WHATSAPP_TEMPLATE_LANGUAGE || '').trim(),
+    PORTAL_PUBLIC_URL: String(process.env.PORTAL_PUBLIC_URL || '').trim()
+  };
+  const issues = Object.entries(values).filter(([, value]) => !value).map(([key]) => `${key}: falta configurar`);
+  if (values.WHATSAPP_PHONE_NUMBER_ID && !/^\d+$/.test(values.WHATSAPP_PHONE_NUMBER_ID)) issues.push('WHATSAPP_PHONE_NUMBER_ID: debe contener solo dígitos');
+  if (values.WHATSAPP_GRAPH_VERSION && !/^v\d+\.\d+$/.test(values.WHATSAPP_GRAPH_VERSION)) issues.push('WHATSAPP_GRAPH_VERSION: usa el formato v25.0');
+  if (values.WHATSAPP_TEMPLATE_NAME && !/^[a-z0-9_]+$/.test(values.WHATSAPP_TEMPLATE_NAME)) issues.push('WHATSAPP_TEMPLATE_NAME: usa minúsculas, números y guiones bajos');
+  if (values.WHATSAPP_TEMPLATE_LANGUAGE && !/^[a-z]{2}(?:_[A-Z]{2})?$/.test(values.WHATSAPP_TEMPLATE_LANGUAGE)) issues.push('WHATSAPP_TEMPLATE_LANGUAGE: usa el formato es_CO');
+  if (values.PORTAL_PUBLIC_URL && !/^https:\/\/[^\s/]+(?:\/.*)?$/.test(values.PORTAL_PUBLIC_URL)) issues.push('PORTAL_PUBLIC_URL: debe ser una dirección https:// válida');
+  if (!/^\d{10,15}$/.test(adminPhone)) issues.push('WHATSAPP_ADMIN_PHONE: debe tener entre 10 y 15 dígitos');
+  return issues;
+}
+
 function config() {
   const phoneId = String(process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim();
   const token = String(process.env.WHATSAPP_ACCESS_TOKEN || '').trim();
@@ -7,8 +26,7 @@ function config() {
   const template = String(process.env.WHATSAPP_TEMPLATE_NAME || '').trim();
   const language = String(process.env.WHATSAPP_TEMPLATE_LANGUAGE || '').trim();
   const publicUrl = String(process.env.PORTAL_PUBLIC_URL || '').trim().replace(/\/$/, '');
-  if (!phoneId || !token || !version || !template || !language || !publicUrl || !/^\d{10,15}$/.test(adminPhone)) return null;
-  if (!/^\d+$/.test(phoneId) || !/^v\d+\.\d+$/.test(version) || !/^[a-z0-9_]+$/.test(template) || !/^[a-z]{2}(?:_[A-Z]{2})?$/.test(language) || !/^https:\/\//.test(publicUrl)) return null;
+  if (configurationIssues().length) return null;
   return { phoneId, token, version, template, language, publicUrl };
 }
 
@@ -53,4 +71,4 @@ async function sendOrderNotice(order) {
   return result.messages[0].id;
 }
 
-module.exports = { adminPhone, config, sendOrderNotice };
+module.exports = { adminPhone, config, configurationIssues, sendOrderNotice };
