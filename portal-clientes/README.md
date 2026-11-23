@@ -16,7 +16,7 @@ Cuando el portal tiene configurada la **WhatsApp Business Platform**, al registr
 
 Para activar los avisos automáticos, configure `PORTAL_PUBLIC_URL` (HTTPS), `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_GRAPH_VERSION`, `WHATSAPP_TEMPLATE_NAME`, `WHATSAPP_TEMPLATE_LANGUAGE` y opcionalmente `WHATSAPP_ADMIN_PHONE` en el entorno del portal. El número remitente debe estar conectado a Meta Cloud API y la plantilla de utilidad aprobada debe tener cinco parámetros de cuerpo, en este orden: **número de pedido, nombre del cliente, detalle de colores/grados/ramos, total COP, enlace al pedido**. Texto sugerido: `Nuevo pedido #{{1}} de {{2}}. Productos: {{3}}. Total estimado COP {{4}}. Ver pedido: {{5}}`. El nombre e idioma deben coincidir exactamente con los de la plantilla aprobada. Guarde el token solo en variables de entorno, nunca en Git.
 
-Cada pedido nuevo queda en la cola `portal_whatsapp_notifications`. Si Meta rechaza el envío, el portal lo reintenta y muestra el estado en el panel. `SOLICITADO` significa que Meta aceptó la solicitud; no confirma entrega al teléfono. Si la integración no está configurada, el portal mantiene la alternativa manual: abre el mensaje para que el cliente pulse Enviar y no presenta esa acción como automática.
+Cada pedido nuevo queda en la cola `portal_whatsapp_notifications`. Si Meta rechaza el envío, el portal lo reintenta y muestra el estado en el panel. `SOLICITADO` significa que Meta aceptó la solicitud; no confirma entrega al teléfono. Si la integración no está configurada, el portal deshabilita los pedidos nuevos y muestra un aviso. El cliente no necesita abrir WhatsApp para enviar el pedido.
 
 ## Límites actuales
 

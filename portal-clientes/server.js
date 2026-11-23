@@ -107,13 +107,6 @@ function validateAvailability(items, catalog) {
   }
 }
 async function availability() { return summarize(await listInventory(pool)); }
-function customerWhatsAppUrl(order, items) {
-  const publicUrl = String(process.env.PORTAL_PUBLIC_URL || '').trim().replace(/\/$/, '');
-  const reviewLink = publicUrl ? `\nRevisar y aprobar: ${publicUrl}/?pedido=${order.id}` : '\nRevisa el pedido en el panel del portal.';
-  const detail = items.map(item => `${item.color} · ${item.grade} · ${item.bunches} ramos`).join('\n');
-  const message = `Hola, soy ${order.name}. Acabo de hacer el pedido #${order.id} en Prestige Roses.\n\n${detail}\n\nTotal estimado: ${money(order.total)}\nObservaciones: ${order.notes || 'Ninguna'}${reviewLink}`;
-  return `https://wa.me/${whatsapp.adminPhone}?text=${encodeURIComponent(message)}`;
-}
 let whatsappBusy = false;
 async function processWhatsAppQueue() {
   if (whatsappBusy || !whatsapp.config()) return;
@@ -199,14 +192,8 @@ app.post('/api/login', async (req, res) => {
 app.post('/api/logout', (_req, res) => { res.setHeader('Set-Cookie', 'portal_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'); res.json({ ok: true }); });
 app.get('/api/catalog', auth('customer'), async (_req, res) => { try { res.json({ colors: await availability(), prices: await prices(), automaticWhatsApp: Boolean(whatsapp.config()) }); } catch (e) { fail(res, e, 500); } });
 app.get('/api/my-orders', auth('customer'), async (req, res) => { try { const { rows } = await pool.query(`SELECT o.*,COALESCE(json_agg(json_build_object('color',i.color,'grade',i.grade,'bunches',i.bunches,'subtotal',i.subtotal)) FILTER (WHERE i.id IS NOT NULL),'[]') AS items FROM portal_orders o LEFT JOIN portal_order_items i ON i.order_id=o.id WHERE o.customer_id=$1 GROUP BY o.id ORDER BY o.id DESC LIMIT 50`, [req.session.id]); res.json(rows); } catch (e) { fail(res, e, 500); } });
-app.get('/api/my-orders/:id/whatsapp', auth('customer'), async (req, res) => {
-  try {
-    const { rows } = await pool.query(`SELECT o.*,c.name,COALESCE(json_agg(json_build_object('color',i.color,'grade',i.grade,'bunches',i.bunches)) FILTER (WHERE i.id IS NOT NULL),'[]') AS items FROM portal_orders o JOIN portal_customers c ON c.id=o.customer_id LEFT JOIN portal_order_items i ON i.order_id=o.id WHERE o.id=$1 AND o.customer_id=$2 GROUP BY o.id,c.id`, [req.params.id, req.session.id]);
-    if (!rows[0]) return res.status(404).json({ error: 'Pedido no encontrado.' });
-    res.json({ whatsappUrl: customerWhatsAppUrl(rows[0], rows[0].items) });
-  } catch (error) { fail(res, error, 500); }
-});
 app.post('/api/orders', auth('customer'), async (req, res) => {
+  if (!whatsapp.config()) return res.status(503).json({ error: 'Los avisos automáticos de WhatsApp aún no están configurados. Comunícate con el administrador.' });
   const client = await pool.connect();
   try {
     const items = Array.isArray(req.body.items) ? req.body.items : [];
@@ -226,12 +213,9 @@ app.post('/api/orders', auth('customer'), async (req, res) => {
     }), catalog);
     const order = await client.query('INSERT INTO portal_orders(customer_id,total,notes) VALUES($1,$2,$3) RETURNING id', [req.session.id, total, String(req.body.notes || '').trim().slice(0, 1000)]);
     for (const [key, bunches] of requested) { const [color, grade] = key.split('|'); await client.query('INSERT INTO portal_order_items(order_id,color,grade,bunches,price_per_bunch,subtotal) VALUES($1,$2,$3,$4,$5,$6)', [order.rows[0].id, color, grade, bunches, p[grade], bunches * p[grade]]); }
-    const { rows: customers } = await client.query('SELECT name FROM portal_customers WHERE id=$1', [req.session.id]);
     await client.query('INSERT INTO portal_whatsapp_notifications(order_id) VALUES($1)', [order.rows[0].id]);
     await client.query('COMMIT');
-    const messageItems = [...requested].map(([key, bunches]) => { const [color, grade] = key.split('|'); return { color, grade, bunches }; });
-    const whatsappUrl = customerWhatsAppUrl({ id: order.rows[0].id, name: customers[0].name, total, notes: String(req.body.notes || '').trim().slice(0, 1000) }, messageItems);
-    res.status(201).json({ id: order.rows[0].id, total, status: 'PENDIENTE', whatsappUrl, automaticWhatsApp: Boolean(whatsapp.config()) });
+    res.status(201).json({ id: order.rows[0].id, total, status: 'PENDIENTE' });
     void processWhatsAppQueue();
   } catch (e) { await client.query('ROLLBACK'); fail(res, e); } finally { client.release(); }
 });
