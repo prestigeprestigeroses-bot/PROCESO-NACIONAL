@@ -1,4 +1,4 @@
-const adminPhone = '573002543548';
+const adminPhone = String(process.env.WHATSAPP_ADMIN_PHONE || '573002543548').replace(/\D/g, '');
 
 function config() {
   const phoneId = String(process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim();
@@ -7,7 +7,7 @@ function config() {
   const template = String(process.env.WHATSAPP_TEMPLATE_NAME || '').trim();
   const language = String(process.env.WHATSAPP_TEMPLATE_LANGUAGE || '').trim();
   const publicUrl = String(process.env.PORTAL_PUBLIC_URL || '').trim().replace(/\/$/, '');
-  if (!phoneId || !token || !version || !template || !language || !publicUrl) return null;
+  if (!phoneId || !token || !version || !template || !language || !publicUrl || !/^\d{10,15}$/.test(adminPhone)) return null;
   if (!/^\d+$/.test(phoneId) || !/^v\d+\.\d+$/.test(version) || !/^[a-z0-9_]+$/.test(template) || !/^[a-z]{2}(?:_[A-Z]{2})?$/.test(language) || !/^https:\/\//.test(publicUrl)) return null;
   return { phoneId, token, version, template, language, publicUrl };
 }
@@ -16,6 +16,10 @@ async function sendOrderNotice(order) {
   const settings = config();
   if (!settings) throw new Error('WhatsApp Business Platform no está configurado.');
   const reviewUrl = `${settings.publicUrl}/?pedido=${order.id}`;
+  const items = Array.isArray(order.items) ? order.items : [];
+  if (!items.length) throw new Error('El pedido no tiene productos para notificar.');
+  const fullDetail = items.map(item => `${item.color} / ${item.grade}: ${item.bunches} ramos`).join('; ');
+  const detail = fullDetail.length <= 850 ? fullDetail : `${fullDetail.slice(0, 820)}... Ver pedido completo en el enlace.`;
   const payload = {
     messaging_product: 'whatsapp',
     to: adminPhone,
@@ -28,6 +32,7 @@ async function sendOrderNotice(order) {
         parameters: [
           { type: 'text', text: String(order.id) },
           { type: 'text', text: String(order.name) },
+          { type: 'text', text: detail },
           { type: 'text', text: String(order.total) },
           { type: 'text', text: reviewUrl }
         ]
