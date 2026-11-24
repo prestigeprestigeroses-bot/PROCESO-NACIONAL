@@ -7,6 +7,7 @@ const path = require('node:path');
 const express = require('express');
 const { Pool } = require('pg');
 const { listInventory } = require('./inventory');
+const { allocateReservations } = require('./reservations');
 const whatsapp = require('./whatsapp');
 
 if (!process.env.DATABASE_URL) throw new Error('Configure DATABASE_URL en las variables del servicio o en portal-clientes/.env');
@@ -35,6 +36,13 @@ const assortedColors = regularColors.filter(color => color !== 'ROJOS');
 const colors = [...regularColors, assortedColor];
 const colorOf = new Map(colorGroups.flatMap(([color, names]) => names.map(name => [name, color])));
 const norm = value => String(value || '').trim().replace(/\s+/g, ' ').toUpperCase();
+function loginIdentifier(value) {
+  const identifier = String(value || '').trim();
+  if (identifier && (!/^[A-Za-z0-9._-]{3,30}$/.test(identifier) || !/[A-Za-z]/.test(identifier))) {
+    throw new Error('El usuario debe tener entre 3 y 30 caracteres, incluir una letra y usar solo letras, números, punto, guion o guion bajo.');
+  }
+  return identifier || null;
+}
 const money = value => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(value);
 const loginFailures = new Map();
 
@@ -99,28 +107,32 @@ function summarize(lots) {
   }
   return Object.values(result);
 }
-function validateAvailability(items, catalog) {
-  const requested = new Map();
-  for (const item of items) {
-    const key = `${item.color}|${item.grade}`;
-    requested.set(key, (requested.get(key) || 0) + Number(item.bunches));
+async function availability(connection = pool, excludeOrderId = null) {
+  const { rows: stockRows } = await connection.query('SELECT color,grade,bunches,stems FROM portal_stock');
+  const { rows: reservations } = await connection.query(`
+    SELECT r.color,r.grade,SUM(r.bunches)::int AS bunches
+    FROM portal_inventory_reservations r JOIN portal_orders o ON o.id=r.order_id
+    WHERE o.status IN ('PENDIENTE','APROBADO') AND ($1::bigint IS NULL OR o.id<>$1)
+    GROUP BY r.color,r.grade
+  `, [excludeOrderId]);
+  const catalog = Object.fromEntries(colors.map(color => [color, { color, grades: Object.fromEntries(grades.map(grade => [grade, { bunches: 0, stems: 0 }])) }]));
+  for (const row of stockRows) {
+    const cell = catalog[row.color]?.grades[row.grade];
+    if (cell) { cell.bunches = Number(row.bunches); cell.stems = Number(row.stems); }
   }
-  const amount = (color, grade) => requested.get(`${color}|${grade}`) || 0;
-  for (const color of regularColors) {
-    const stock = catalog.find(row => row.color === color).grades;
-    for (const grade of grades) {
-      if (grade === 'EXPORTACION GRANEL') continue;
-      if (amount(color, grade) > stock[grade].bunches) throw new Error(`Inventario insuficiente de ${color} · ${grade}.`);
-    }
+  for (const row of reservations) {
+    const cell = catalog[row.color]?.grades[row.grade];
+    if (!cell) continue;
+    const stemsPerBunch = cell.bunches ? cell.stems / cell.bunches : 0;
+    cell.bunches = Math.max(0, cell.bunches - Number(row.bunches));
+    cell.stems = Math.max(0, Math.round(cell.stems - Number(row.bunches) * stemsPerBunch));
   }
-  const totalStock = catalog.find(row => row.color === assortedColor).grades;
-  for (const grade of grades) {
-    if (grade === 'EXPORTACION GRANEL') continue;
-    const total = assortedColors.reduce((sum, color) => sum + amount(color, grade), amount(assortedColor, grade));
-    if (total > totalStock[grade].bunches) throw new Error(`No hay suficientes ramos para combinar colores surtidos y ${grade}.`);
+  for (const color of assortedColors) for (const grade of grades) {
+    catalog[assortedColor].grades[grade].bunches += catalog[color].grades[grade].bunches;
+    catalog[assortedColor].grades[grade].stems += catalog[color].grades[grade].stems;
   }
+  return Object.values(catalog);
 }
-async function availability() { return summarize(await listInventory(pool)); }
 let whatsappBusy = false;
 let customerWhatsAppBusy = false;
 async function processWhatsAppQueue() {
@@ -211,6 +223,16 @@ async function init() {
       grade VARCHAR(40) NOT NULL, bunches INTEGER NOT NULL CHECK (bunches > 0), price_per_bunch NUMERIC(12,2) NOT NULL,
       subtotal NUMERIC(14,2) NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS portal_stock (
+      color VARCHAR(40) NOT NULL, grade VARCHAR(40) NOT NULL,
+      bunches INTEGER NOT NULL CHECK (bunches >= 0), stems INTEGER NOT NULL DEFAULT 0 CHECK (stems >= 0),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY (color,grade)
+    );
+    CREATE TABLE IF NOT EXISTS portal_inventory_reservations (
+      order_id BIGINT NOT NULL REFERENCES portal_orders(id) ON DELETE CASCADE,
+      color VARCHAR(40) NOT NULL, grade VARCHAR(40) NOT NULL,
+      bunches INTEGER NOT NULL CHECK (bunches > 0)
+    );
     CREATE TABLE IF NOT EXISTS portal_whatsapp_notifications (
       order_id BIGINT PRIMARY KEY REFERENCES portal_orders(id) ON DELETE CASCADE,
       status VARCHAR(20) NOT NULL DEFAULT 'PENDIENTE',
@@ -230,6 +252,22 @@ async function init() {
   `);
   await pool.query('ALTER TABLE portal_orders ADD COLUMN IF NOT EXISTS pickup_date DATE');
   await pool.query('ALTER TABLE portal_orders ADD COLUMN IF NOT EXISTS pickup_hour SMALLINT');
+  await pool.query('ALTER TABLE portal_customers ADD COLUMN IF NOT EXISTS login_identifier VARCHAR(30)');
+  await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS portal_customers_login_identifier_unique ON portal_customers (LOWER(login_identifier)) WHERE login_identifier IS NOT NULL');
+  const stockClient = await pool.connect();
+  try {
+    await stockClient.query('BEGIN');
+    await stockClient.query("SELECT pg_advisory_xact_lock(hashtext('portal-stock-init'))");
+    const { rows } = await stockClient.query('SELECT COUNT(*)::int AS count FROM portal_stock');
+    if (!rows[0].count) {
+      const initial = summarize(await listInventory(stockClient));
+      for (const row of initial.filter(item => item.color !== assortedColor)) for (const grade of grades.filter(item => item !== 'EXPORTACION GRANEL')) {
+        const value = row.grades[grade];
+        await stockClient.query('INSERT INTO portal_stock(color,grade,bunches,stems) VALUES($1,$2,$3,$4)', [row.color, grade, value.bunches, value.stems]);
+      }
+    }
+    await stockClient.query('COMMIT');
+  } catch (error) { await stockClient.query('ROLLBACK'); throw error; } finally { stockClient.release(); }
   const count = await pool.query('SELECT COUNT(*)::int AS n FROM portal_prices');
   if (!count.rows[0].n) {
     for (const [grade, price] of [['NACIONAL', 10000], ['BAJAS', 12000], ['NACIONAL GRANEL', 8000], ['BAJAS GRANEL', 7000]]) {
@@ -245,15 +283,15 @@ app.post('/api/login', async (req, res) => {
   try {
     if (req.body.role === 'admin') { if (!secureEqual(req.body.password, adminPassword)) throw new Error('Clave incorrecta.'); setSession(res, token('admin', 0)); return res.json({ role: 'admin' }); }
     const phone = String(req.body.phone || '').trim();
-    const failureKey = `${req.ip}:${phone}`;
+    const failureKey = `${req.ip}:${phone.toLowerCase()}`;
     const failure = loginFailures.get(failureKey);
     if (failure && failure.until > Date.now() && failure.count >= 5) return res.status(429).json({ error: 'Demasiados intentos. Espera 15 minutos antes de volver a ingresar.' });
-    const { rows } = await pool.query('SELECT * FROM portal_customers WHERE phone=$1 AND active=TRUE', [phone]);
+    const { rows } = await pool.query('SELECT * FROM portal_customers WHERE active=TRUE AND (phone=$1 OR LOWER(login_identifier)=LOWER($1))', [phone]);
     if (!rows[0] || !matchPassword(String(req.body.password || ''), rows[0].password_hash)) {
       const count = failure && failure.until > Date.now() ? failure.count + 1 : 1;
       if (loginFailures.size > 10000) loginFailures.clear();
       loginFailures.set(failureKey, { count, until: Date.now() + 15 * 60 * 1000 });
-      throw new Error('Teléfono o clave incorrectos.');
+      throw new Error('Usuario, teléfono o clave incorrectos.');
     }
     loginFailures.delete(failureKey);
     setSession(res, token('customer', rows[0].id)); res.json({ role: 'customer', name: rows[0].name });
@@ -279,7 +317,7 @@ app.post('/api/orders', auth('customer'), async (req, res) => {
     if (pickupDate < `${todayParts.year}-${todayParts.month}-${todayParts.day}`) throw new Error('El día de recogida no puede estar en el pasado.');
     await client.query('BEGIN');
     await client.query("SELECT pg_advisory_xact_lock(hashtext('portal-orders'))");
-    const catalog = await availability(); const p = await prices();
+    const catalog = await availability(client); const p = await prices();
     const requested = new Map(); let total = 0;
     for (const item of items) {
       const color = norm(item.color), grade = norm(item.grade), bunches = Number(item.bunches);
@@ -287,11 +325,13 @@ app.post('/api/orders', auth('customer'), async (req, res) => {
       const key = `${color}|${grade}`; requested.set(key, (requested.get(key) || 0) + bunches);
       total += bunches * p[grade];
     }
-    validateAvailability([...requested].map(([key, bunches]) => {
+    const requestedItems = [...requested].map(([key, bunches]) => {
       const [color, grade] = key.split('|'); return { color, grade, bunches };
-    }), catalog);
+    });
+    const allocations = allocateReservations(catalog, requestedItems, assortedColors);
     const order = await client.query('INSERT INTO portal_orders(customer_id,total,notes,pickup_date,pickup_hour) VALUES($1,$2,$3,$4,$5) RETURNING id', [req.session.id, total, String(req.body.notes || '').trim().slice(0, 1000), pickupDate, pickupHour]);
     for (const [key, bunches] of requested) { const [color, grade] = key.split('|'); await client.query('INSERT INTO portal_order_items(order_id,color,grade,bunches,price_per_bunch,subtotal) VALUES($1,$2,$3,$4,$5,$6)', [order.rows[0].id, color, grade, bunches, p[grade], bunches * p[grade]]); }
+    for (const item of allocations) await client.query('INSERT INTO portal_inventory_reservations(order_id,color,grade,bunches) VALUES($1,$2,$3,$4)', [order.rows[0].id, item.color, item.grade, item.bunches]);
     await client.query('INSERT INTO portal_whatsapp_notifications(order_id) VALUES($1)', [order.rows[0].id]);
     await client.query('COMMIT');
     res.status(201).json({ id: order.rows[0].id, total, status: 'PENDIENTE' });
@@ -300,34 +340,41 @@ app.post('/api/orders', auth('customer'), async (req, res) => {
 });
 app.get('/api/admin', auth('admin'), async (_req, res) => {
   try {
-    const [orders, customers, p] = await Promise.all([
+    const [orders, customers, p, stock] = await Promise.all([
       pool.query(`SELECT o.*,c.name,c.phone,(SELECT n.status FROM portal_whatsapp_notifications n WHERE n.order_id=o.id) AS whatsapp_status,(SELECT n.last_error FROM portal_whatsapp_notifications n WHERE n.order_id=o.id) AS whatsapp_error,(SELECT n.status FROM portal_customer_notifications n WHERE n.order_id=o.id) AS customer_whatsapp_status,(SELECT n.last_error FROM portal_customer_notifications n WHERE n.order_id=o.id) AS customer_whatsapp_error,COALESCE(json_agg(json_build_object('color',i.color,'grade',i.grade,'bunches',i.bunches,'subtotal',i.subtotal)) FILTER (WHERE i.id IS NOT NULL),'[]') AS items FROM portal_orders o JOIN portal_customers c ON c.id=o.customer_id LEFT JOIN portal_order_items i ON i.order_id=o.id GROUP BY o.id,c.id ORDER BY o.id DESC LIMIT 100`),
-      pool.query('SELECT c.id,c.name,c.phone,c.active,(SELECT COUNT(*)::int FROM portal_orders o WHERE o.customer_id=c.id) AS order_count FROM portal_customers c ORDER BY c.name'), prices()
+      pool.query('SELECT c.id,c.name,c.phone,c.login_identifier,c.active,(SELECT COUNT(*)::int FROM portal_orders o WHERE o.customer_id=c.id) AS order_count FROM portal_customers c ORDER BY c.name'), prices(), availability()
     ]);
-    res.json({ orders: orders.rows, customers: customers.rows, prices: p, automaticWhatsApp: Boolean(whatsapp.config()), automaticApproval: Boolean(whatsapp.approvalConfig()), whatsappConfigurationIssues: whatsapp.configurationIssues(), approvalConfigurationIssues: whatsapp.approvalConfigurationIssues() });
+    res.json({ orders: orders.rows, customers: customers.rows, prices: p, stock, automaticWhatsApp: Boolean(whatsapp.config()), automaticApproval: Boolean(whatsapp.approvalConfig()), whatsappConfigurationIssues: whatsapp.configurationIssues(), approvalConfigurationIssues: whatsapp.approvalConfigurationIssues() });
   } catch (e) { fail(res, e, 500); }
 });
 app.post('/api/admin/customers', auth('admin'), async (req, res) => {
-  try { const name = String(req.body.name || '').trim(), phone = String(req.body.phone || '').trim(), password = String(req.body.password || ''); if (!name || !/^\+?\d{10,15}$/.test(phone) || password.length !== 4) throw new Error('Ingrese nombre, teléfono internacional y una clave de exactamente 4 caracteres.'); const { rows } = await pool.query('INSERT INTO portal_customers(name,phone,password_hash) VALUES($1,$2,$3) RETURNING id,name,phone', [name, phone, hashPassword(password)]); res.status(201).json(rows[0]); } catch (e) { fail(res, e); }
+  try {
+    const name = String(req.body.name || '').trim(), phone = String(req.body.phone || '').trim(), password = String(req.body.password || '');
+    const identifier = loginIdentifier(req.body.loginIdentifier);
+    if (!name || !/^\+?\d{10,15}$/.test(phone) || password.length !== 4) throw new Error('Ingrese nombre, WhatsApp válido y una clave de exactamente 4 caracteres.');
+    const { rows } = await pool.query('INSERT INTO portal_customers(name,phone,login_identifier,password_hash) VALUES($1,$2,$3,$4) RETURNING id,name,phone,login_identifier', [name, phone, identifier, hashPassword(password)]);
+    res.status(201).json(rows[0]);
+  } catch (e) { if (e.code === '23505') return res.status(409).json({ error: 'Ese usuario o WhatsApp ya está asignado a otro cliente.' }); fail(res, e); }
 });
 app.put('/api/admin/customers/:id', auth('admin'), async (req, res) => {
   try {
     const id = Number(req.params.id);
     const name = String(req.body.name || '').trim();
     const phone = String(req.body.phone || '').trim();
+    const identifier = loginIdentifier(req.body.loginIdentifier);
     const password = String(req.body.password || '');
     if (!Number.isSafeInteger(id) || id < 1) throw new Error('Cliente no válido.');
     if (!name || name.length > 160 || !/^\+?\d{10,15}$/.test(phone)) throw new Error('Ingrese nombre y teléfono internacional válidos.');
     if (password && password.length !== 4) throw new Error('La nueva clave debe tener exactamente 4 caracteres.');
     const result = await pool.query(
-      `UPDATE portal_customers SET name=$1,phone=$2,password_hash=COALESCE($3,password_hash)
-       WHERE id=$4 RETURNING id,name,phone,active`,
-      [name, phone, password ? hashPassword(password) : null, id]
+      `UPDATE portal_customers SET name=$1,phone=$2,login_identifier=$3,password_hash=COALESCE($4,password_hash)
+       WHERE id=$5 RETURNING id,name,phone,login_identifier,active`,
+      [name, phone, identifier, password ? hashPassword(password) : null, id]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Cliente no encontrado.' });
     res.json(result.rows[0]);
   } catch (error) {
-    if (error.code === '23505') return res.status(409).json({ error: 'Ese teléfono ya está asignado a otro cliente.' });
+    if (error.code === '23505') return res.status(409).json({ error: 'Ese usuario o WhatsApp ya está asignado a otro cliente.' });
     fail(res, error);
   }
 });
@@ -348,6 +395,22 @@ app.delete('/api/admin/customers/:id', auth('admin'), async (req, res) => {
 });
 app.put('/api/admin/prices', auth('admin'), async (req, res) => {
   try { for (const grade of grades) { const value = Number(req.body[grade]); if (!Number.isSafeInteger(value) || value < 1 || value > 100000000) throw new Error(`Precio inválido para ${grade}.`); } for (const grade of grades) await pool.query('UPDATE portal_prices SET price_per_bunch=$1,updated_at=NOW() WHERE grade=$2', [req.body[grade], grade]); res.json({ prices: await prices() }); } catch (e) { fail(res, e); }
+});
+app.put('/api/admin/stock', auth('admin'), async (req, res) => {
+  const color = norm(req.body.color), grade = norm(req.body.grade), available = Number(req.body.available);
+  if (!regularColors.includes(color) || !grades.includes(grade) || grade === 'EXPORTACION GRANEL' || !Number.isSafeInteger(available) || available < 0 || available > 1000000) {
+    return res.status(400).json({ error: 'Selecciona color, grado y cantidad disponible válidos.' });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('portal-orders'))");
+    const { rows } = await client.query(`SELECT COALESCE(SUM(r.bunches),0)::int AS reserved FROM portal_inventory_reservations r JOIN portal_orders o ON o.id=r.order_id WHERE r.color=$1 AND r.grade=$2 AND o.status IN ('PENDIENTE','APROBADO')`, [color, grade]);
+    const reserved = rows[0].reserved;
+    await client.query(`UPDATE portal_stock SET bunches=$3,stems=$3*25,updated_at=NOW() WHERE color=$1 AND grade=$2`, [color, grade, available + reserved]);
+    await client.query('COMMIT');
+    res.json({ color, grade, available });
+  } catch (error) { await client.query('ROLLBACK'); fail(res, error, 500); } finally { client.release(); }
 });
 app.delete('/api/admin/orders/:id', auth('admin'), async (req, res) => {
   const id = Number(req.params.id);
@@ -376,8 +439,12 @@ async function decideOrder(id, decision, reason = '', notificationMessageId = nu
       if (!notice.rowCount) throw new Error('El botón no corresponde al aviso de este pedido.');
     }
     if (decision === 'APROBADO') {
-      const catalog = await availability(); const { rows: items } = await client.query('SELECT color,grade,bunches FROM portal_order_items WHERE order_id=$1', [order.id]);
-      validateAvailability(items, catalog);
+      const catalog = await availability(client, order.id); const { rows: items } = await client.query('SELECT color,grade,bunches FROM portal_order_items WHERE order_id=$1', [order.id]);
+      const allocations = allocateReservations(catalog, items, assortedColors);
+      await client.query('DELETE FROM portal_inventory_reservations WHERE order_id=$1', [order.id]);
+      for (const item of allocations) await client.query('INSERT INTO portal_inventory_reservations(order_id,color,grade,bunches) VALUES($1,$2,$3,$4)', [order.id, item.color, item.grade, item.bunches]);
+    } else {
+      await client.query('DELETE FROM portal_inventory_reservations WHERE order_id=$1', [order.id]);
     }
     await client.query('UPDATE portal_orders SET status=$1,rejection_reason=$2,decided_at=NOW() WHERE id=$3', [decision, String(reason || '').trim().slice(0, 500), order.id]);
     const automaticConfirmation = decision === 'APROBADO' && Boolean(whatsapp.approvalConfig());
