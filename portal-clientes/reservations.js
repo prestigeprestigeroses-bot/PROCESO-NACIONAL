@@ -25,4 +25,25 @@ function allocateReservations(catalog, requested, assortedColors) {
   return allocations;
 }
 
-module.exports = { allocateReservations };
+function applyReservations(catalog, reservations, assortedColors) {
+  const available = catalog.map(row => ({ color: row.color, grades: Object.fromEntries(Object.entries(row.grades).map(([grade, stock]) => [grade, { ...stock }])) }));
+  const byColor = new Map(available.map(row => [row.color, row]));
+  for (const reservation of reservations) {
+    const cell = byColor.get(reservation.color)?.grades[reservation.grade];
+    if (!cell) continue;
+    const stemsPerBunch = cell.bunches ? cell.stems / cell.bunches : 0;
+    cell.bunches = Math.max(0, cell.bunches - Number(reservation.bunches));
+    cell.stems = Math.max(0, Math.round(cell.stems - Number(reservation.bunches) * stemsPerBunch));
+  }
+  const assorted = byColor.get('COLORES SURTIDOS');
+  if (assorted) for (const grade of Object.keys(assorted.grades)) {
+    assorted.grades[grade] = { bunches: 0, stems: 0 };
+    for (const color of assortedColors) {
+      const cell = byColor.get(color)?.grades[grade];
+      if (cell) { assorted.grades[grade].bunches += cell.bunches; assorted.grades[grade].stems += cell.stems; }
+    }
+  }
+  return available;
+}
+
+module.exports = { allocateReservations, applyReservations };

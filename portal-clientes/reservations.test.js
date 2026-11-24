@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { allocateReservations } = require('./reservations');
+const { allocateReservations, applyReservations } = require('./reservations');
 
 const catalog = [
   { color: 'ROJOS', grades: { NACIONAL: { bunches: 3 } } },
@@ -29,4 +29,15 @@ test('exportación granel mantiene cantidad libre sin reserva', () => {
   assert.deepEqual(allocateReservations(catalog, [
     { color: 'ROJOS', grade: 'EXPORTACION GRANEL', bunches: 10 }
   ], ['BLANCOS', 'AMARILLOS']), []);
+});
+
+test('el pedido reduce solo la vista del portal y cancelarlo restaura la existencia real', () => {
+  const real = [
+    { color: 'ROJOS', grades: { NACIONAL: { bunches: 10, stems: 250 } } },
+    { color: 'COLORES SURTIDOS', grades: { NACIONAL: { bunches: 0, stems: 0 } } }
+  ];
+  const requested = [{ color: 'ROJOS', grade: 'NACIONAL', bunches: 3 }];
+  assert.equal(applyReservations(real, requested, [])[0].grades.NACIONAL.bunches, 7);
+  assert.equal(real[0].grades.NACIONAL.bunches, 10);
+  assert.equal(applyReservations(real, [], [])[0].grades.NACIONAL.bunches, 10);
 });

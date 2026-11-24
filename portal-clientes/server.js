@@ -7,7 +7,7 @@ const path = require('node:path');
 const express = require('express');
 const { Pool } = require('pg');
 const { listInventory } = require('./inventory');
-const { allocateReservations } = require('./reservations');
+const { allocateReservations, applyReservations } = require('./reservations');
 const whatsapp = require('./whatsapp');
 
 if (!process.env.DATABASE_URL) throw new Error('Configure DATABASE_URL en las variables del servicio o en portal-clientes/.env');
@@ -108,30 +108,14 @@ function summarize(lots) {
   return Object.values(result);
 }
 async function availability(connection = pool, excludeOrderId = null) {
-  const { rows: stockRows } = await connection.query('SELECT color,grade,bunches,stems FROM portal_stock');
+  const lots = await listInventory(connection);
   const { rows: reservations } = await connection.query(`
     SELECT r.color,r.grade,SUM(r.bunches)::int AS bunches
     FROM portal_inventory_reservations r JOIN portal_orders o ON o.id=r.order_id
     WHERE o.status IN ('PENDIENTE','APROBADO') AND ($1::bigint IS NULL OR o.id<>$1)
     GROUP BY r.color,r.grade
   `, [excludeOrderId]);
-  const catalog = Object.fromEntries(colors.map(color => [color, { color, grades: Object.fromEntries(grades.map(grade => [grade, { bunches: 0, stems: 0 }])) }]));
-  for (const row of stockRows) {
-    const cell = catalog[row.color]?.grades[row.grade];
-    if (cell) { cell.bunches = Number(row.bunches); cell.stems = Number(row.stems); }
-  }
-  for (const row of reservations) {
-    const cell = catalog[row.color]?.grades[row.grade];
-    if (!cell) continue;
-    const stemsPerBunch = cell.bunches ? cell.stems / cell.bunches : 0;
-    cell.bunches = Math.max(0, cell.bunches - Number(row.bunches));
-    cell.stems = Math.max(0, Math.round(cell.stems - Number(row.bunches) * stemsPerBunch));
-  }
-  for (const color of assortedColors) for (const grade of grades) {
-    catalog[assortedColor].grades[grade].bunches += catalog[color].grades[grade].bunches;
-    catalog[assortedColor].grades[grade].stems += catalog[color].grades[grade].stems;
-  }
-  return Object.values(catalog);
+  return applyReservations(summarize(lots), reservations, assortedColors);
 }
 let whatsappBusy = false;
 let customerWhatsAppBusy = false;
@@ -157,8 +141,8 @@ async function processWhatsAppQueue() {
       finally { connection.release(); }
       if (!job) break;
       try {
-        const { rows } = await pool.query("SELECT o.id,o.total,to_char(o.pickup_date,'YYYY-MM-DD') AS pickup_date,o.pickup_hour,c.name FROM portal_orders o JOIN portal_customers c ON c.id=o.customer_id WHERE o.id=$1", [job.order_id]);
-        if (!rows[0]) throw new Error('Pedido no encontrado.');
+        const { rows } = await pool.query("SELECT o.id,o.total,to_char(o.pickup_date,'YYYY-MM-DD') AS pickup_date,o.pickup_hour,c.name FROM portal_orders o JOIN portal_customers c ON c.id=o.customer_id WHERE o.id=$1 AND o.status='PENDIENTE'", [job.order_id]);
+        if (!rows[0]) { await pool.query("UPDATE portal_whatsapp_notifications SET status='CANCELADO',updated_at=NOW() WHERE order_id=$1", [job.order_id]); continue; }
         const { rows: items } = await pool.query('SELECT color,grade,bunches FROM portal_order_items WHERE order_id=$1 ORDER BY id', [job.order_id]);
         const messageId = await whatsapp.sendOrderNotice({ ...rows[0], items });
         await pool.query("UPDATE portal_whatsapp_notifications SET status='SOLICITADO',message_id=$2,last_error='',updated_at=NOW() WHERE order_id=$1", [job.order_id, messageId]);
@@ -193,7 +177,7 @@ async function processCustomerWhatsAppQueue() {
       if (!job) break;
       try {
         const { rows } = await pool.query("SELECT o.id,o.total,to_char(o.pickup_date,'YYYY-MM-DD') AS pickup_date,o.pickup_hour,c.name,c.phone FROM portal_orders o JOIN portal_customers c ON c.id=o.customer_id WHERE o.id=$1 AND o.status='APROBADO'", [job.order_id]);
-        if (!rows[0]) throw new Error('Pedido aprobado no encontrado.');
+        if (!rows[0]) { await pool.query("UPDATE portal_customer_notifications SET status='CANCELADO',updated_at=NOW() WHERE order_id=$1", [job.order_id]); continue; }
         const messageId = await whatsapp.sendCustomerApproval(rows[0]);
         await pool.query("UPDATE portal_customer_notifications SET status='SOLICITADO',message_id=$2,last_error='',updated_at=NOW() WHERE order_id=$1", [job.order_id, messageId]);
       } catch (error) {
@@ -223,11 +207,6 @@ async function init() {
       grade VARCHAR(40) NOT NULL, bunches INTEGER NOT NULL CHECK (bunches > 0), price_per_bunch NUMERIC(12,2) NOT NULL,
       subtotal NUMERIC(14,2) NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS portal_stock (
-      color VARCHAR(40) NOT NULL, grade VARCHAR(40) NOT NULL,
-      bunches INTEGER NOT NULL CHECK (bunches >= 0), stems INTEGER NOT NULL DEFAULT 0 CHECK (stems >= 0),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY (color,grade)
-    );
     CREATE TABLE IF NOT EXISTS portal_inventory_reservations (
       order_id BIGINT NOT NULL REFERENCES portal_orders(id) ON DELETE CASCADE,
       color VARCHAR(40) NOT NULL, grade VARCHAR(40) NOT NULL,
@@ -254,20 +233,6 @@ async function init() {
   await pool.query('ALTER TABLE portal_orders ADD COLUMN IF NOT EXISTS pickup_hour SMALLINT');
   await pool.query('ALTER TABLE portal_customers ADD COLUMN IF NOT EXISTS login_identifier VARCHAR(30)');
   await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS portal_customers_login_identifier_unique ON portal_customers (LOWER(login_identifier)) WHERE login_identifier IS NOT NULL');
-  const stockClient = await pool.connect();
-  try {
-    await stockClient.query('BEGIN');
-    await stockClient.query("SELECT pg_advisory_xact_lock(hashtext('portal-stock-init'))");
-    const { rows } = await stockClient.query('SELECT COUNT(*)::int AS count FROM portal_stock');
-    if (!rows[0].count) {
-      const initial = summarize(await listInventory(stockClient));
-      for (const row of initial.filter(item => item.color !== assortedColor)) for (const grade of grades.filter(item => item !== 'EXPORTACION GRANEL')) {
-        const value = row.grades[grade];
-        await stockClient.query('INSERT INTO portal_stock(color,grade,bunches,stems) VALUES($1,$2,$3,$4)', [row.color, grade, value.bunches, value.stems]);
-      }
-    }
-    await stockClient.query('COMMIT');
-  } catch (error) { await stockClient.query('ROLLBACK'); throw error; } finally { stockClient.release(); }
   const count = await pool.query('SELECT COUNT(*)::int AS n FROM portal_prices');
   if (!count.rows[0].n) {
     for (const [grade, price] of [['NACIONAL', 10000], ['BAJAS', 12000], ['NACIONAL GRANEL', 8000], ['BAJAS GRANEL', 7000]]) {
@@ -340,11 +305,11 @@ app.post('/api/orders', auth('customer'), async (req, res) => {
 });
 app.get('/api/admin', auth('admin'), async (_req, res) => {
   try {
-    const [orders, customers, p, stock] = await Promise.all([
-      pool.query(`SELECT o.*,c.name,c.phone,(SELECT n.status FROM portal_whatsapp_notifications n WHERE n.order_id=o.id) AS whatsapp_status,(SELECT n.last_error FROM portal_whatsapp_notifications n WHERE n.order_id=o.id) AS whatsapp_error,(SELECT n.status FROM portal_customer_notifications n WHERE n.order_id=o.id) AS customer_whatsapp_status,(SELECT n.last_error FROM portal_customer_notifications n WHERE n.order_id=o.id) AS customer_whatsapp_error,COALESCE(json_agg(json_build_object('color',i.color,'grade',i.grade,'bunches',i.bunches,'subtotal',i.subtotal)) FILTER (WHERE i.id IS NOT NULL),'[]') AS items FROM portal_orders o JOIN portal_customers c ON c.id=o.customer_id LEFT JOIN portal_order_items i ON i.order_id=o.id GROUP BY o.id,c.id ORDER BY o.id DESC LIMIT 100`),
-      pool.query('SELECT c.id,c.name,c.phone,c.login_identifier,c.active,(SELECT COUNT(*)::int FROM portal_orders o WHERE o.customer_id=c.id) AS order_count FROM portal_customers c ORDER BY c.name'), prices(), availability()
+    const [orders, customers, p] = await Promise.all([
+      pool.query(`SELECT o.*,c.name,c.phone,(SELECT n.status FROM portal_whatsapp_notifications n WHERE n.order_id=o.id) AS whatsapp_status,(SELECT n.last_error FROM portal_whatsapp_notifications n WHERE n.order_id=o.id) AS whatsapp_error,(SELECT n.status FROM portal_customer_notifications n WHERE n.order_id=o.id) AS customer_whatsapp_status,(SELECT n.last_error FROM portal_customer_notifications n WHERE n.order_id=o.id) AS customer_whatsapp_error,COALESCE(json_agg(json_build_object('color',i.color,'grade',i.grade,'bunches',i.bunches,'subtotal',i.subtotal)) FILTER (WHERE i.id IS NOT NULL),'[]') AS items FROM portal_orders o JOIN portal_customers c ON c.id=o.customer_id LEFT JOIN portal_order_items i ON i.order_id=o.id GROUP BY o.id,c.id ORDER BY o.id DESC`),
+      pool.query('SELECT c.id,c.name,c.phone,c.login_identifier,c.active,(SELECT COUNT(*)::int FROM portal_orders o WHERE o.customer_id=c.id) AS order_count FROM portal_customers c ORDER BY c.name'), prices()
     ]);
-    res.json({ orders: orders.rows, customers: customers.rows, prices: p, stock, automaticWhatsApp: Boolean(whatsapp.config()), automaticApproval: Boolean(whatsapp.approvalConfig()), whatsappConfigurationIssues: whatsapp.configurationIssues(), approvalConfigurationIssues: whatsapp.approvalConfigurationIssues() });
+    res.json({ orders: orders.rows, customers: customers.rows, prices: p, automaticWhatsApp: Boolean(whatsapp.config()), automaticApproval: Boolean(whatsapp.approvalConfig()), whatsappConfigurationIssues: whatsapp.configurationIssues(), approvalConfigurationIssues: whatsapp.approvalConfigurationIssues() });
   } catch (e) { fail(res, e, 500); }
 });
 app.post('/api/admin/customers', auth('admin'), async (req, res) => {
@@ -396,22 +361,6 @@ app.delete('/api/admin/customers/:id', auth('admin'), async (req, res) => {
 app.put('/api/admin/prices', auth('admin'), async (req, res) => {
   try { for (const grade of grades) { const value = Number(req.body[grade]); if (!Number.isSafeInteger(value) || value < 1 || value > 100000000) throw new Error(`Precio inválido para ${grade}.`); } for (const grade of grades) await pool.query('UPDATE portal_prices SET price_per_bunch=$1,updated_at=NOW() WHERE grade=$2', [req.body[grade], grade]); res.json({ prices: await prices() }); } catch (e) { fail(res, e); }
 });
-app.put('/api/admin/stock', auth('admin'), async (req, res) => {
-  const color = norm(req.body.color), grade = norm(req.body.grade), available = Number(req.body.available);
-  if (!regularColors.includes(color) || !grades.includes(grade) || grade === 'EXPORTACION GRANEL' || !Number.isSafeInteger(available) || available < 0 || available > 1000000) {
-    return res.status(400).json({ error: 'Selecciona color, grado y cantidad disponible válidos.' });
-  }
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query("SELECT pg_advisory_xact_lock(hashtext('portal-orders'))");
-    const { rows } = await client.query(`SELECT COALESCE(SUM(r.bunches),0)::int AS reserved FROM portal_inventory_reservations r JOIN portal_orders o ON o.id=r.order_id WHERE r.color=$1 AND r.grade=$2 AND o.status IN ('PENDIENTE','APROBADO')`, [color, grade]);
-    const reserved = rows[0].reserved;
-    await client.query(`UPDATE portal_stock SET bunches=$3,stems=$3*25,updated_at=NOW() WHERE color=$1 AND grade=$2`, [color, grade, available + reserved]);
-    await client.query('COMMIT');
-    res.json({ color, grade, available });
-  } catch (error) { await client.query('ROLLBACK'); fail(res, error, 500); } finally { client.release(); }
-});
 app.delete('/api/admin/orders/:id', auth('admin'), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ error: 'Pedido no válido.' });
@@ -424,6 +373,24 @@ app.delete('/api/admin/orders/:id', auth('admin'), async (req, res) => {
     await client.query('DELETE FROM portal_orders WHERE id=$1', [id]);
     await client.query('COMMIT');
     res.json({ deleted: true });
+  } catch (error) { await client.query('ROLLBACK'); fail(res, error, 500); } finally { client.release(); }
+});
+app.post('/api/admin/orders/:id/cancel', auth('admin'), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ error: 'Pedido no válido.' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('portal-orders'))");
+    const { rows } = await client.query('SELECT status FROM portal_orders WHERE id=$1 FOR UPDATE', [id]);
+    if (!rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Pedido no encontrado.' }); }
+    if (!['PENDIENTE', 'APROBADO'].includes(rows[0].status)) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'Este pedido ya fue cerrado.' }); }
+    await client.query("UPDATE portal_orders SET status='CANCELADO',rejection_reason='Cancelado por el administrador',decided_at=NOW() WHERE id=$1", [id]);
+    await client.query('DELETE FROM portal_inventory_reservations WHERE order_id=$1', [id]);
+    await client.query("UPDATE portal_whatsapp_notifications SET status='CANCELADO',updated_at=NOW() WHERE order_id=$1 AND status<>'SOLICITADO'", [id]);
+    await client.query("UPDATE portal_customer_notifications SET status='CANCELADO',updated_at=NOW() WHERE order_id=$1 AND status<>'SOLICITADO'", [id]);
+    await client.query('COMMIT');
+    res.json({ id, status: 'CANCELADO' });
   } catch (error) { await client.query('ROLLBACK'); fail(res, error, 500); } finally { client.release(); }
 });
 async function decideOrder(id, decision, reason = '', notificationMessageId = null) {
