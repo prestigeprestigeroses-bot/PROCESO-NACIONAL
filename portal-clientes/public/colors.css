@@ -13,3 +13,4 @@
 .highlighted-order { border-color: #8c173d; box-shadow: 0 0 0 3px #8c173d33; }
 .notice-state { background: #fff6dc; color: #725306; border: 1px solid #ecd49b; border-radius: 10px; padding: 12px 15px; font-size: 13px; margin: 16px 0 0; }
 .notice-status { font-size: 12px; margin: 0 0 12px; }
+#login-form .admin-check { justify-content: center; margin-top: 30px; padding-top: 18px; border-top: 1px solid #d9e5d9; }
