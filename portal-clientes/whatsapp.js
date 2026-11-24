@@ -30,6 +30,71 @@ function config() {
   return { phoneId, token, version, template, language, publicUrl };
 }
 
+function approvalConfigurationIssues() {
+  const issues = [];
+  for (const key of ['WHATSAPP_APPROVAL_TEMPLATE_NAME', 'WHATSAPP_CUSTOMER_TEMPLATE_NAME', 'WHATSAPP_WEBHOOK_VERIFY_TOKEN', 'WHATSAPP_APP_SECRET']) {
+    if (!String(process.env[key] || '').trim()) issues.push(`${key}: falta configurar`);
+  }
+  for (const key of ['WHATSAPP_APPROVAL_TEMPLATE_NAME', 'WHATSAPP_CUSTOMER_TEMPLATE_NAME']) {
+    const value = String(process.env[key] || '').trim();
+    if (value && !/^[a-z0-9_]+$/.test(value)) issues.push(`${key}: usa minúsculas, números y guiones bajos`);
+  }
+  return issues;
+}
+
+function approvalConfig() {
+  const base = config();
+  if (!base || approvalConfigurationIssues().length) return null;
+  return {
+    ...base,
+    approvalTemplate: process.env.WHATSAPP_APPROVAL_TEMPLATE_NAME.trim(),
+    customerTemplate: process.env.WHATSAPP_CUSTOMER_TEMPLATE_NAME.trim(),
+    verifyToken: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN.trim(),
+    appSecret: process.env.WHATSAPP_APP_SECRET.trim()
+  };
+}
+
+function approvalPayload(orderId, appSecret) {
+  const id = String(orderId);
+  const signature = require('node:crypto').createHmac('sha256', appSecret).update(`aprobar:${id}`).digest('hex').slice(0, 24);
+  return `aprobar:${id}:${signature}`;
+}
+
+function approvedPayloadOrderId(payload, appSecret) {
+  const match = /^aprobar:([1-9]\d*):([a-f0-9]{24})$/.exec(String(payload || ''));
+  if (!match || !Number.isSafeInteger(Number(match[1]))) return null;
+  const expected = approvalPayload(match[1], appSecret);
+  const a = Buffer.from(expected); const b = Buffer.from(String(payload));
+  return a.length === b.length && require('node:crypto').timingSafeEqual(a, b) ? Number(match[1]) : null;
+}
+
+function customerPhone(phone) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  return digits.length === 10 ? `57${digits}` : digits;
+}
+
+async function sendTemplate(settings, to, name, parameters, buttons = []) {
+  const payload = {
+    messaging_product: 'whatsapp', to, type: 'template',
+    template: {
+      name, language: { code: settings.language },
+      components: [{ type: 'body', parameters: parameters.map(value => ({ type: 'text', text: String(value) })) }, ...buttons]
+    }
+  };
+  const response = await fetch(`https://graph.facebook.com/${settings.version}/${settings.phoneId}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${settings.token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload), signal: AbortSignal.timeout(15000)
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result.messages?.[0]?.id) {
+    const code = result.error?.code ? ` (código ${result.error.code})` : '';
+    const details = String(result.error?.error_data?.details || '').replace(/[\r\n\t]/g, ' ').slice(0, 180);
+    throw new Error(`Meta rechazó el aviso${code}${details ? `: ${details}` : ''}.`);
+  }
+  return result.messages[0].id;
+}
+
 async function sendOrderNotice(order) {
   const settings = config();
   if (!settings) throw new Error('WhatsApp Business Platform no está configurado.');
@@ -46,38 +111,35 @@ async function sendOrderNotice(order) {
   }
   if (truncated) parts.push('Ver el resto del pedido en el enlace');
   const detail = parts.join(' | ');
-  const payload = {
-    messaging_product: 'whatsapp',
-    to: adminPhone,
-    type: 'template',
-    template: {
-      name: settings.template,
-      language: { code: settings.language },
-      components: [{
-        type: 'body',
-        parameters: [
-          { type: 'text', text: String(order.id) },
-          { type: 'text', text: String(order.name) },
-          { type: 'text', text: detail },
-          { type: 'text', text: new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 }).format(Number(order.total)) },
-          { type: 'text', text: reviewUrl }
-        ]
-      }]
-    }
-  };
+  const approval = approvalConfig();
+  const buttons = approval ? [{ type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: approvalPayload(order.id, approval.appSecret) }] }] : [];
+  return sendTemplate(settings, adminPhone, approval?.approvalTemplate || settings.template, [
+    order.id, order.name, detail,
+    new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 }).format(Number(order.total)), reviewUrl
+  ], buttons);
+}
+
+async function sendCustomerApproval(order) {
+  const settings = approvalConfig();
+  if (!settings) throw new Error('La confirmación automática de WhatsApp no está configurada.');
+  const pickup = order.pickup_date ? `${String(order.pickup_date).slice(0, 10)} a las ${String(order.pickup_hour).padStart(2, '0')}:00` : 'Por coordinar';
+  return sendTemplate(settings, customerPhone(order.phone), settings.customerTemplate, [
+    order.name, order.id, new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 }).format(Number(order.total)), pickup
+  ]);
+}
+
+async function sendText(to, text) {
+  const settings = approvalConfig();
+  if (!settings) throw new Error('WhatsApp Business Platform no está configurado.');
   const response = await fetch(`https://graph.facebook.com/${settings.version}/${settings.phoneId}/messages`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${settings.token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ messaging_product: 'whatsapp', to, type: 'text', text: { body: text } }),
     signal: AbortSignal.timeout(15000)
   });
   const result = await response.json().catch(() => ({}));
-  if (!response.ok || !result.messages?.[0]?.id) {
-    const code = result.error?.code ? ` (código ${result.error.code})` : '';
-    const details = String(result.error?.error_data?.details || '').replace(/[\r\n\t]/g, ' ').slice(0, 180);
-    throw new Error(`Meta rechazó el aviso${code}${details ? `: ${details}` : ''}.`);
-  }
+  if (!response.ok || !result.messages?.[0]?.id) throw new Error(`Meta rechazó la respuesta al administrador (código ${result.error?.code || 'desconocido'}).`);
   return result.messages[0].id;
 }
 
-module.exports = { adminPhone, config, configurationIssues, sendOrderNotice };
+module.exports = { adminPhone, config, approvalConfig, approvalConfigurationIssues, approvedPayloadOrderId, configurationIssues, sendOrderNotice, sendCustomerApproval, sendText };

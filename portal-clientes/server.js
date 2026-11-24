@@ -39,6 +39,7 @@ const money = value => new Intl.NumberFormat('es-CO', { style: 'currency', curre
 const loginFailures = new Map();
 
 app.disable('x-powered-by');
+app.use('/webhooks/whatsapp', express.json({ limit: '2mb', verify(req, _res, body) { req.rawBody = Buffer.from(body); } }));
 app.use(express.json({ limit: '30kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
@@ -121,6 +122,7 @@ function validateAvailability(items, catalog) {
 }
 async function availability() { return summarize(await listInventory(pool)); }
 let whatsappBusy = false;
+let customerWhatsAppBusy = false;
 async function processWhatsAppQueue() {
   if (whatsappBusy || !whatsapp.config()) return;
   whatsappBusy = true;
@@ -156,6 +158,40 @@ async function processWhatsAppQueue() {
   } catch (error) { console.error('No se pudo procesar la cola de WhatsApp:', error.message); }
   finally { whatsappBusy = false; }
 }
+async function processCustomerWhatsAppQueue() {
+  if (customerWhatsAppBusy || !whatsapp.approvalConfig()) return;
+  customerWhatsAppBusy = true;
+  try {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const connection = await pool.connect();
+      let job;
+      try {
+        await connection.query('BEGIN');
+        const { rows } = await connection.query(`
+          SELECT order_id FROM portal_customer_notifications
+          WHERE status='PENDIENTE'
+            OR (status IN ('ERROR','ENVIANDO') AND attempts < 10 AND updated_at < NOW() - INTERVAL '5 minutes')
+          ORDER BY order_id LIMIT 1 FOR UPDATE SKIP LOCKED
+        `);
+        job = rows[0];
+        if (job) await connection.query("UPDATE portal_customer_notifications SET status='ENVIANDO',attempts=attempts+1,updated_at=NOW() WHERE order_id=$1", [job.order_id]);
+        await connection.query('COMMIT');
+      } catch (error) { await connection.query('ROLLBACK'); throw error; }
+      finally { connection.release(); }
+      if (!job) break;
+      try {
+        const { rows } = await pool.query("SELECT o.id,o.total,to_char(o.pickup_date,'YYYY-MM-DD') AS pickup_date,o.pickup_hour,c.name,c.phone FROM portal_orders o JOIN portal_customers c ON c.id=o.customer_id WHERE o.id=$1 AND o.status='APROBADO'", [job.order_id]);
+        if (!rows[0]) throw new Error('Pedido aprobado no encontrado.');
+        const messageId = await whatsapp.sendCustomerApproval(rows[0]);
+        await pool.query("UPDATE portal_customer_notifications SET status='SOLICITADO',message_id=$2,last_error='',updated_at=NOW() WHERE order_id=$1", [job.order_id, messageId]);
+      } catch (error) {
+        await pool.query("UPDATE portal_customer_notifications SET status='ERROR',last_error=$2,updated_at=NOW() WHERE order_id=$1", [job.order_id, String(error.message || error).slice(0, 300)]);
+        console.error('No se pudo solicitar la confirmación para el pedido', job.order_id);
+      }
+    }
+  } catch (error) { console.error('No se pudo procesar la cola de confirmaciones:', error.message); }
+  finally { customerWhatsAppBusy = false; }
+}
 async function init() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS portal_customers (
@@ -176,6 +212,14 @@ async function init() {
       subtotal NUMERIC(14,2) NOT NULL
     );
     CREATE TABLE IF NOT EXISTS portal_whatsapp_notifications (
+      order_id BIGINT PRIMARY KEY REFERENCES portal_orders(id) ON DELETE CASCADE,
+      status VARCHAR(20) NOT NULL DEFAULT 'PENDIENTE',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT NOT NULL DEFAULT '',
+      message_id TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS portal_customer_notifications (
       order_id BIGINT PRIMARY KEY REFERENCES portal_orders(id) ON DELETE CASCADE,
       status VARCHAR(20) NOT NULL DEFAULT 'PENDIENTE',
       attempts INTEGER NOT NULL DEFAULT 0,
@@ -257,10 +301,10 @@ app.post('/api/orders', auth('customer'), async (req, res) => {
 app.get('/api/admin', auth('admin'), async (_req, res) => {
   try {
     const [orders, customers, p] = await Promise.all([
-      pool.query(`SELECT o.*,c.name,c.phone,(SELECT n.status FROM portal_whatsapp_notifications n WHERE n.order_id=o.id) AS whatsapp_status,(SELECT n.last_error FROM portal_whatsapp_notifications n WHERE n.order_id=o.id) AS whatsapp_error,COALESCE(json_agg(json_build_object('color',i.color,'grade',i.grade,'bunches',i.bunches,'subtotal',i.subtotal)) FILTER (WHERE i.id IS NOT NULL),'[]') AS items FROM portal_orders o JOIN portal_customers c ON c.id=o.customer_id LEFT JOIN portal_order_items i ON i.order_id=o.id GROUP BY o.id,c.id ORDER BY o.id DESC LIMIT 100`),
+      pool.query(`SELECT o.*,c.name,c.phone,(SELECT n.status FROM portal_whatsapp_notifications n WHERE n.order_id=o.id) AS whatsapp_status,(SELECT n.last_error FROM portal_whatsapp_notifications n WHERE n.order_id=o.id) AS whatsapp_error,(SELECT n.status FROM portal_customer_notifications n WHERE n.order_id=o.id) AS customer_whatsapp_status,(SELECT n.last_error FROM portal_customer_notifications n WHERE n.order_id=o.id) AS customer_whatsapp_error,COALESCE(json_agg(json_build_object('color',i.color,'grade',i.grade,'bunches',i.bunches,'subtotal',i.subtotal)) FILTER (WHERE i.id IS NOT NULL),'[]') AS items FROM portal_orders o JOIN portal_customers c ON c.id=o.customer_id LEFT JOIN portal_order_items i ON i.order_id=o.id GROUP BY o.id,c.id ORDER BY o.id DESC LIMIT 100`),
       pool.query('SELECT c.id,c.name,c.phone,c.active,(SELECT COUNT(*)::int FROM portal_orders o WHERE o.customer_id=c.id) AS order_count FROM portal_customers c ORDER BY c.name'), prices()
     ]);
-    res.json({ orders: orders.rows, customers: customers.rows, prices: p, automaticWhatsApp: Boolean(whatsapp.config()), whatsappConfigurationIssues: whatsapp.configurationIssues() });
+    res.json({ orders: orders.rows, customers: customers.rows, prices: p, automaticWhatsApp: Boolean(whatsapp.config()), automaticApproval: Boolean(whatsapp.approvalConfig()), whatsappConfigurationIssues: whatsapp.configurationIssues(), approvalConfigurationIssues: whatsapp.approvalConfigurationIssues() });
   } catch (e) { fail(res, e, 500); }
 });
 app.post('/api/admin/customers', auth('admin'), async (req, res) => {
@@ -319,27 +363,72 @@ app.delete('/api/admin/orders/:id', auth('admin'), async (req, res) => {
     res.json({ deleted: true });
   } catch (error) { await client.query('ROLLBACK'); fail(res, error, 500); } finally { client.release(); }
 });
-app.put('/api/admin/orders/:id', auth('admin'), async (req, res) => {
+async function decideOrder(id, decision, reason = '', notificationMessageId = null) {
   const client = await pool.connect();
   try {
-    const decision = norm(req.body.decision); if (!['APROBADO', 'RECHAZADO'].includes(decision)) throw new Error('Decisión no válida.');
+    if (!['APROBADO', 'RECHAZADO'].includes(decision)) throw new Error('Decisión no válida.');
     await client.query('BEGIN');
-    const { rows } = await client.query('SELECT o.*,c.name,c.phone FROM portal_orders o JOIN portal_customers c ON c.id=o.customer_id WHERE o.id=$1 FOR UPDATE OF o', [req.params.id]);
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('portal-orders'))");
+    const { rows } = await client.query('SELECT o.*,c.name,c.phone FROM portal_orders o JOIN portal_customers c ON c.id=o.customer_id WHERE o.id=$1 FOR UPDATE OF o', [id]);
     const order = rows[0]; if (!order || order.status !== 'PENDIENTE') throw new Error('El pedido ya fue procesado o no existe.');
+    if (notificationMessageId) {
+      const notice = await client.query("SELECT 1 FROM portal_whatsapp_notifications WHERE order_id=$1 AND message_id=$2 AND status='SOLICITADO'", [id, notificationMessageId]);
+      if (!notice.rowCount) throw new Error('El botón no corresponde al aviso de este pedido.');
+    }
     if (decision === 'APROBADO') {
       const catalog = await availability(); const { rows: items } = await client.query('SELECT color,grade,bunches FROM portal_order_items WHERE order_id=$1', [order.id]);
       validateAvailability(items, catalog);
     }
-    await client.query('UPDATE portal_orders SET status=$1,rejection_reason=$2,decided_at=NOW() WHERE id=$3', [decision, String(req.body.reason || '').trim().slice(0, 500), order.id]);
+    await client.query('UPDATE portal_orders SET status=$1,rejection_reason=$2,decided_at=NOW() WHERE id=$3', [decision, String(reason || '').trim().slice(0, 500), order.id]);
+    const automaticConfirmation = decision === 'APROBADO' && Boolean(whatsapp.approvalConfig());
+    if (automaticConfirmation) await client.query('INSERT INTO portal_customer_notifications(order_id) VALUES($1) ON CONFLICT DO NOTHING', [order.id]);
     await client.query('COMMIT');
-    const message = decision === 'APROBADO' ? `Hola ${order.name}, tu pedido #${order.id} de Prestige Roses fue aprobado. Total a pagar: ${money(order.total)}. Pronto coordinaremos la entrega.` : `Hola ${order.name}, tu pedido #${order.id} de Prestige Roses no pudo ser aprobado. ${String(req.body.reason || '').trim()}`;
-    res.json({ id: order.id, status: decision, message, whatsappUrl: `https://wa.me/${order.phone.replace(/\D/g, '')}?text=${encodeURIComponent(message)}` });
-  } catch (e) { await client.query('ROLLBACK'); fail(res, e); } finally { client.release(); }
+    if (automaticConfirmation) void processCustomerWhatsAppQueue();
+    const message = decision === 'APROBADO' ? `Hola ${order.name}, tu pedido #${order.id} de Prestige Roses fue aprobado. Total a pagar: ${money(order.total)}. Pronto coordinaremos la entrega.` : `Hola ${order.name}, tu pedido #${order.id} de Prestige Roses no pudo ser aprobado. ${String(reason || '').trim()}`;
+    return { id: order.id, status: decision, automaticConfirmation, message, whatsappUrl: automaticConfirmation ? null : `https://wa.me/${order.phone.replace(/\D/g, '')}?text=${encodeURIComponent(message)}` };
+  } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+}
+app.put('/api/admin/orders/:id', auth('admin'), async (req, res) => {
+  try { res.json(await decideOrder(req.params.id, norm(req.body.decision), req.body.reason)); }
+  catch (error) { fail(res, error); }
+});
+app.get('/webhooks/whatsapp', (req, res) => {
+  const settings = whatsapp.approvalConfig();
+  if (settings && req.query['hub.mode'] === 'subscribe' && secureEqual(req.query['hub.verify_token'], settings.verifyToken)) return res.type('text/plain').send(String(req.query['hub.challenge'] || ''));
+  res.sendStatus(403);
+});
+app.post('/webhooks/whatsapp', async (req, res) => {
+  const settings = whatsapp.approvalConfig();
+  if (!settings || !req.rawBody) return res.sendStatus(503);
+  const expected = `sha256=${crypto.createHmac('sha256', settings.appSecret).update(req.rawBody).digest('hex')}`;
+  if (!secureEqual(req.get('x-hub-signature-256'), expected)) return res.sendStatus(403);
+  try {
+    if (req.body?.object !== 'whatsapp_business_account') return res.sendStatus(200);
+    for (const entry of req.body.entry || []) {
+      for (const change of entry.changes || []) {
+        if (change.field !== 'messages' || String(change.value?.metadata?.phone_number_id) !== settings.phoneId) continue;
+        for (const message of change.value.messages || []) {
+          if (String(message.from || '').replace(/\D/g, '') !== whatsapp.adminPhone || message.type !== 'button') continue;
+          const orderId = whatsapp.approvedPayloadOrderId(message.button?.payload, settings.appSecret);
+          if (!orderId || !message.context?.id) continue;
+          try {
+            await decideOrder(orderId, 'APROBADO', '', message.context.id);
+            void whatsapp.sendText(whatsapp.adminPhone, `Pedido #${orderId} aprobado. Se está enviando la confirmación al cliente.`).catch(error => console.error('No se pudo responder al administrador por WhatsApp:', error.message));
+          } catch (error) {
+            console.error(`No se pudo aprobar el pedido ${orderId} desde WhatsApp:`, error.message);
+            void whatsapp.sendText(whatsapp.adminPhone, `No se pudo aprobar el pedido #${orderId}: ${String(error.message).slice(0, 180)} Revisa el portal.`).catch(sendError => console.error('No se pudo responder al administrador por WhatsApp:', sendError.message));
+          }
+        }
+      }
+    }
+    res.sendStatus(200);
+  } catch (error) { console.error('Error al procesar webhook de WhatsApp:', error.message); res.sendStatus(500); }
 });
 app.use((err, _req, res, _next) => fail(res, err, 500));
 init().then(() => {
   const port = Number(process.env.PORT) || Number(process.env.PORTAL_PORT) || 3018;
   app.listen(port, '0.0.0.0', () => console.log(`Portal de clientes escuchando en el puerto ${port}`));
   void processWhatsAppQueue();
-  setInterval(() => { void processWhatsAppQueue(); }, 30000);
+  void processCustomerWhatsAppQueue();
+  setInterval(() => { void processWhatsAppQueue(); void processCustomerWhatsAppQueue(); }, 30000);
 }).catch(error => { console.error(error); process.exitCode = 1; });
