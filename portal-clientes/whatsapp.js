@@ -36,16 +36,16 @@ async function sendOrderNotice(order) {
   const reviewUrl = `${settings.publicUrl}/?pedido=${order.id}`;
   const items = Array.isArray(order.items) ? order.items : [];
   if (!items.length) throw new Error('El pedido no tiene productos para notificar.');
-  const lines = [];
-  if (order.pickup_date) lines.push(`*Recogida:* ${String(order.pickup_date).slice(0, 10)} a las ${String(order.pickup_hour).padStart(2, '0')}:00`);
+  const parts = [];
+  if (order.pickup_date) parts.push(`*Recogida:* ${String(order.pickup_date).slice(0, 10)} a las ${String(order.pickup_hour).padStart(2, '0')}:00`);
   let truncated = false;
   for (const item of items) {
-    const line = `• *${item.color}* — ${item.grade}: ${item.bunches} ${item.bunches === 1 ? 'ramo' : 'ramos'}`;
-    if ([...lines, line].join('\n').length > 800) { truncated = true; break; }
-    lines.push(line);
+    const part = `*${item.color}* — ${item.grade}: ${item.bunches} ${item.bunches === 1 ? 'ramo' : 'ramos'}`;
+    if ([...parts, part].join(' | ').length > 650) { truncated = true; break; }
+    parts.push(part);
   }
-  if (truncated) lines.push('… Ver el resto del pedido en el enlace.');
-  const detail = `\n${lines.join('\n')}`;
+  if (truncated) parts.push('Ver el resto del pedido en el enlace');
+  const detail = parts.join(' | ');
   const payload = {
     messaging_product: 'whatsapp',
     to: adminPhone,
@@ -74,7 +74,8 @@ async function sendOrderNotice(order) {
   const result = await response.json().catch(() => ({}));
   if (!response.ok || !result.messages?.[0]?.id) {
     const code = result.error?.code ? ` (código ${result.error.code})` : '';
-    throw new Error(`Meta rechazó el aviso${code}.`);
+    const details = String(result.error?.error_data?.details || '').replace(/[\r\n\t]/g, ' ').slice(0, 180);
+    throw new Error(`Meta rechazó el aviso${code}${details ? `: ${details}` : ''}.`);
   }
   return result.messages[0].id;
 }
