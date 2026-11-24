@@ -61,6 +61,10 @@ Gracias por tu pedido.
 
 En Meta Developers > su app > WhatsApp > Configuración de producción > Webhooks, coloque como URL de devolución de llamada `https://SU-DOMINIO/webhooks/whatsapp` y el token de verificación anterior. Suscriba el campo **messages** de la cuenta de WhatsApp y publique la app para recibir eventos de producción. Mantenga las plantillas anteriores activas hasta que las nuevas sean aprobadas. Los nombres e idioma de ambas nuevas plantillas deben coincidir exactamente con los configurados. Guarde las claves solo en Railway, nunca en Git. Si la confirmación falla, `portal_customer_notifications` conserva el error y la reintenta hasta diez veces. La aceptación de Meta no garantiza entrega al teléfono.
 
+## Páginas públicas para publicar la app de Meta
+
+El portal sirve sin inicio de sesión `/privacidad.html`, `/condiciones.html` y `/eliminacion-datos.html`. Si el dominio público es `https://ventas.up.railway.app`, las direcciones completas son `https://ventas.up.railway.app/privacidad.html`, `https://ventas.up.railway.app/condiciones.html` y `https://ventas.up.railway.app/eliminacion-datos.html`. El correo de contacto publicado en estas páginas es `prestigep535@gmail.com`. Revise que el texto refleje las prácticas reales del negocio antes de publicar la app y mantenga actualizadas estas páginas cuando cambien los procesos.
+
 ## Límites actuales
 
 - Sin cuenta de WhatsApp Business Platform, número remitente, plantillas aprobadas y dirección pública HTTPS, el envío automático no se puede activar. La aprobación desde WhatsApp requiere además el botón y el webhook configurados; escribir «aprobar» como texto no cambia el pedido.
