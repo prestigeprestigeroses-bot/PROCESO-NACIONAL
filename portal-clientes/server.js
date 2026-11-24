@@ -393,8 +393,8 @@ app.put('/api/admin/orders/:id', auth('admin'), async (req, res) => {
   catch (error) { fail(res, error); }
 });
 app.get('/webhooks/whatsapp', (req, res) => {
-  const settings = whatsapp.approvalConfig();
-  if (settings && req.query['hub.mode'] === 'subscribe' && secureEqual(req.query['hub.verify_token'], settings.verifyToken)) return res.type('text/plain').send(String(req.query['hub.challenge'] || ''));
+  const verifyToken = String(process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || '').trim();
+  if (verifyToken && req.query['hub.mode'] === 'subscribe' && secureEqual(req.query['hub.verify_token'], verifyToken)) return res.type('text/plain').send(String(req.query['hub.challenge'] || ''));
   res.sendStatus(403);
 });
 app.post('/webhooks/whatsapp', async (req, res) => {
