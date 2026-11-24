@@ -24,16 +24,17 @@ Cada pedido nuevo queda en la cola `portal_whatsapp_notifications`. Si Meta rech
 
 ## Aprobar desde WhatsApp y confirmar al cliente
 
-El portal admite un botón **Aprobar pedido** en el mensaje que recibe el administrador. Al pulsarlo, Meta envía la respuesta al webhook `PORTAL_PUBLIC_URL/webhooks/whatsapp`. El portal verifica la firma de Meta, el número del administrador, el identificador del mensaje original y que el pedido siga pendiente. Después comprueba de nuevo el inventario y lo aprueba. La confirmación al cliente se envía mediante una cola con reintentos; también se usa cuando el administrador aprueba desde el portal. La respuesta al administrador indica si se aprobó o por qué no pudo aprobarse. Para rechazar, se sigue usando el portal.
+El portal admite los botones **Aprobar pedido** y **Rechazar pedido** en el mensaje que recibe el administrador. Al pulsar uno, Meta envía la respuesta al webhook `PORTAL_PUBLIC_URL/webhooks/whatsapp`. El portal verifica la firma de Meta, el número del administrador, el identificador del mensaje original y que el pedido siga pendiente. Al aprobar, comprueba de nuevo el inventario y envía la confirmación al cliente mediante una cola con reintentos. Al rechazar, elimina la reserva del pedido y los ramos vuelven a estar disponibles en el portal; no cambia el inventario real de remisiones. El administrador recibe una respuesta en WhatsApp con el resultado. El rechazo por WhatsApp no envía automáticamente un mensaje al cliente.
 
 Para activar esta función, además de las variables de la sección anterior, configure en Railway:
 
 - `WHATSAPP_APPROVAL_TEMPLATE_NAME`: nombre de una **nueva** plantilla de utilidad aprobada con los mismos cinco parámetros de cuerpo del aviso actual y un botón de respuesta rápida **Aprobar pedido** como primer botón. El cuerpo puede tener saltos de línea fijos. El portal envía el identificador seguro del pedido como carga útil del botón.
+- `WHATSAPP_DECISION_TEMPLATE_NAME`: nombre opcional de otra plantilla de utilidad aprobada con los mismos cinco parámetros de cuerpo y **dos botones de respuesta rápida**: primero **Aprobar pedido** y segundo **Rechazar pedido**. Al configurarla, reemplaza la plantilla de un botón para los nuevos avisos. Mantenga `WHATSAPP_APPROVAL_TEMPLATE_NAME` configurada para los avisos enviados anteriormente.
 - `WHATSAPP_CUSTOMER_TEMPLATE_NAME`: nombre de otra plantilla de utilidad aprobada para la confirmación al cliente, con cuatro parámetros de cuerpo en este orden: nombre, número de pedido, total COP y fecha/hora de recogida.
 - `WHATSAPP_WEBHOOK_VERIFY_TOKEN`: cadena secreta elegida por usted, idéntica a la que ingrese al configurar el webhook en Meta.
 - `WHATSAPP_APP_SECRET`: clave secreta de la app en Meta Developers > Configuración de la app > Básica. No es el token de acceso de WhatsApp.
 
-Texto sugerido para la plantilla del administrador (cinco variables en el cuerpo, un botón de respuesta rápida **Aprobar pedido**):
+Texto sugerido para la plantilla del administrador (cinco variables en el cuerpo, dos botones de respuesta rápida **Aprobar pedido** y **Rechazar pedido**, en ese orden):
 
 ```text
 Prestige Roses recibió un nuevo pedido.
@@ -47,7 +48,7 @@ Prestige Roses recibió un nuevo pedido.
 
 *Ver pedido:* {{5}}
 
-Revisa los detalles antes de aprobar.
+Revisa los detalles antes de aprobar o rechazar.
 ```
 
 Texto sugerido para la plantilla al cliente (cuatro variables en el cuerpo):
@@ -70,6 +71,6 @@ El portal sirve sin inicio de sesión `/privacidad.html`, `/condiciones.html` y 
 ## Límites actuales
 
 - Sin cuenta de WhatsApp Business Platform, número remitente, plantillas aprobadas y dirección pública HTTPS, el envío automático no se puede activar. La aprobación desde WhatsApp requiere además el botón y el webhook configurados; escribir «aprobar» como texto no cambia el pedido.
-- El pedido aprobado **no crea una remisión ni descuenta o reserva inventario**. El inventario se vuelve a comprobar al aprobar. El personal debe registrar la remisión en el programa principal para descontar la flor; si cambia el inventario entre aprobación y remisión, hay que coordinar con el cliente.
+- El pedido aprobado **no crea una remisión ni descuenta el inventario real**. Mantiene una reserva que reduce la disponibilidad visible en el portal. Al rechazar un pedido pendiente o cancelar uno aprobado, se elimina su reserva. El personal registra la remisión por separado en el programa principal.
 - Bajas y Bajas granel son grados de inventario independientes. El portal valida cada grado por separado. El precio mostrado es por ramo, incluidos los grados granel.
 - Las variedades que no estén en la tabla de colores proporcionada no se muestran. Los nombres alternativos `QUICKSAND`/`QUICK SAND`, `SOMMERSAND`/`SUMMERSAND` y `MOODY BLUE`/`MOODY BLUES` se agrupan en el mismo color.

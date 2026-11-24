@@ -39,6 +39,8 @@ function approvalConfigurationIssues() {
     const value = String(process.env[key] || '').trim();
     if (value && !/^[a-z0-9_]+$/.test(value)) issues.push(`${key}: usa minúsculas, números y guiones bajos`);
   }
+  const decisionTemplate = String(process.env.WHATSAPP_DECISION_TEMPLATE_NAME || '').trim();
+  if (decisionTemplate && !/^[a-z0-9_]+$/.test(decisionTemplate)) issues.push('WHATSAPP_DECISION_TEMPLATE_NAME: usa minúsculas, números y guiones bajos');
   return issues;
 }
 
@@ -48,24 +50,32 @@ function approvalConfig() {
   return {
     ...base,
     approvalTemplate: process.env.WHATSAPP_APPROVAL_TEMPLATE_NAME.trim(),
+    decisionTemplate: String(process.env.WHATSAPP_DECISION_TEMPLATE_NAME || '').trim(),
     customerTemplate: process.env.WHATSAPP_CUSTOMER_TEMPLATE_NAME.trim(),
     verifyToken: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN.trim(),
     appSecret: process.env.WHATSAPP_APP_SECRET.trim()
   };
 }
 
-function approvalPayload(orderId, appSecret) {
+function decisionPayload(orderId, decision, appSecret) {
   const id = String(orderId);
-  const signature = require('node:crypto').createHmac('sha256', appSecret).update(`aprobar:${id}`).digest('hex').slice(0, 24);
-  return `aprobar:${id}:${signature}`;
+  const action = decision === 'RECHAZADO' ? 'rechazar' : 'aprobar';
+  const signature = require('node:crypto').createHmac('sha256', appSecret).update(`${action}:${id}`).digest('hex').slice(0, 24);
+  return `${action}:${id}:${signature}`;
+}
+
+function payloadDecision(payload, appSecret) {
+  const match = /^(aprobar|rechazar):([1-9]\d*):([a-f0-9]{24})$/.exec(String(payload || ''));
+  if (!match || !Number.isSafeInteger(Number(match[2]))) return null;
+  const decision = match[1] === 'rechazar' ? 'RECHAZADO' : 'APROBADO';
+  const expected = decisionPayload(match[2], decision, appSecret);
+  const a = Buffer.from(expected); const b = Buffer.from(String(payload));
+  return a.length === b.length && require('node:crypto').timingSafeEqual(a, b) ? { orderId: Number(match[2]), decision } : null;
 }
 
 function approvedPayloadOrderId(payload, appSecret) {
-  const match = /^aprobar:([1-9]\d*):([a-f0-9]{24})$/.exec(String(payload || ''));
-  if (!match || !Number.isSafeInteger(Number(match[1]))) return null;
-  const expected = approvalPayload(match[1], appSecret);
-  const a = Buffer.from(expected); const b = Buffer.from(String(payload));
-  return a.length === b.length && require('node:crypto').timingSafeEqual(a, b) ? Number(match[1]) : null;
+  const parsed = payloadDecision(payload, appSecret);
+  return parsed?.decision === 'APROBADO' ? parsed.orderId : null;
 }
 
 function customerPhone(phone) {
@@ -112,8 +122,9 @@ async function sendOrderNotice(order) {
   if (truncated) parts.push('Ver el resto del pedido en el enlace');
   const detail = parts.join(' | ');
   const approval = approvalConfig();
-  const buttons = approval ? [{ type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: approvalPayload(order.id, approval.appSecret) }] }] : [];
-  return sendTemplate(settings, adminPhone, approval?.approvalTemplate || settings.template, [
+  const buttons = approval ? [{ type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: decisionPayload(order.id, 'APROBADO', approval.appSecret) }] }] : [];
+  if (approval?.decisionTemplate) buttons.push({ type: 'button', sub_type: 'quick_reply', index: '1', parameters: [{ type: 'payload', payload: decisionPayload(order.id, 'RECHAZADO', approval.appSecret) }] });
+  return sendTemplate(settings, adminPhone, approval?.decisionTemplate || approval?.approvalTemplate || settings.template, [
     order.id, order.name, detail,
     new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 }).format(Number(order.total)), reviewUrl
   ], buttons);
@@ -142,4 +153,4 @@ async function sendText(to, text) {
   return result.messages[0].id;
 }
 
-module.exports = { adminPhone, config, approvalConfig, approvalConfigurationIssues, approvedPayloadOrderId, configurationIssues, sendOrderNotice, sendCustomerApproval, sendText };
+module.exports = { adminPhone, config, approvalConfig, approvalConfigurationIssues, approvedPayloadOrderId, payloadDecision, configurationIssues, sendOrderNotice, sendCustomerApproval, sendText };

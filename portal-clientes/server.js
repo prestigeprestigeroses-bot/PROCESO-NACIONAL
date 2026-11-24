@@ -251,7 +251,9 @@ app.post('/api/login', async (req, res) => {
     const failureKey = `${req.ip}:${phone.toLowerCase()}`;
     const failure = loginFailures.get(failureKey);
     if (failure && failure.until > Date.now() && failure.count >= 5) return res.status(429).json({ error: 'Demasiados intentos. Espera 15 minutos antes de volver a ingresar.' });
-    const { rows } = await pool.query('SELECT * FROM portal_customers WHERE active=TRUE AND (phone=$1 OR LOWER(login_identifier)=LOWER($1))', [phone]);
+    const localPhone = /^(?:\+?57)?3\d{9}$/.test(phone) ? phone.replace(/\D/g, '').slice(-10) : null;
+    const phoneOptions = localPhone ? [localPhone, `57${localPhone}`, `+57${localPhone}`] : [phone];
+    const { rows } = await pool.query('SELECT * FROM portal_customers WHERE active=TRUE AND (phone=ANY($1::text[]) OR LOWER(login_identifier)=LOWER($2))', [phoneOptions, phone]);
     if (!rows[0] || !matchPassword(String(req.body.password || ''), rows[0].password_hash)) {
       const count = failure && failure.until > Date.now() ? failure.count + 1 : 1;
       if (loginFailures.size > 10000) loginFailures.clear();
@@ -443,14 +445,15 @@ app.post('/webhooks/whatsapp', async (req, res) => {
         if (change.field !== 'messages' || String(change.value?.metadata?.phone_number_id) !== settings.phoneId) continue;
         for (const message of change.value.messages || []) {
           if (String(message.from || '').replace(/\D/g, '') !== whatsapp.adminPhone || message.type !== 'button') continue;
-          const orderId = whatsapp.approvedPayloadOrderId(message.button?.payload, settings.appSecret);
-          if (!orderId || !message.context?.id) continue;
+          const action = whatsapp.payloadDecision(message.button?.payload, settings.appSecret);
+          if (!action || !message.context?.id) continue;
           try {
-            await decideOrder(orderId, 'APROBADO', '', message.context.id);
-            void whatsapp.sendText(whatsapp.adminPhone, `Pedido #${orderId} aprobado. Se está enviando la confirmación al cliente.`).catch(error => console.error('No se pudo responder al administrador por WhatsApp:', error.message));
+            await decideOrder(action.orderId, action.decision, action.decision === 'RECHAZADO' ? 'Rechazado por el administrador desde WhatsApp' : '', message.context.id);
+            const reply = action.decision === 'RECHAZADO' ? `Pedido #${action.orderId} rechazado. Los ramos reservados volvieron a estar disponibles en el portal.` : `Pedido #${action.orderId} aprobado. Se está enviando la confirmación al cliente.`;
+            void whatsapp.sendText(whatsapp.adminPhone, reply).catch(error => console.error('No se pudo responder al administrador por WhatsApp:', error.message));
           } catch (error) {
-            console.error(`No se pudo aprobar el pedido ${orderId} desde WhatsApp:`, error.message);
-            void whatsapp.sendText(whatsapp.adminPhone, `No se pudo aprobar el pedido #${orderId}: ${String(error.message).slice(0, 180)} Revisa el portal.`).catch(sendError => console.error('No se pudo responder al administrador por WhatsApp:', sendError.message));
+            console.error(`No se pudo procesar el pedido ${action.orderId} desde WhatsApp:`, error.message);
+            void whatsapp.sendText(whatsapp.adminPhone, `No se pudo procesar el pedido #${action.orderId}: ${String(error.message).slice(0, 180)} Revisa el portal.`).catch(sendError => console.error('No se pudo responder al administrador por WhatsApp:', sendError.message));
           }
         }
       }

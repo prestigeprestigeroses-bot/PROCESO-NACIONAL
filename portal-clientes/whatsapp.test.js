@@ -29,9 +29,22 @@ test('el botón identifica el pedido y la confirmación usa el teléfono del cli
     assert.equal(whatsapp.approvedPayloadOrderId(payload, process.env.WHATSAPP_APP_SECRET), 17);
     assert.equal(whatsapp.approvedPayloadOrderId(payload.replace('17:', '18:'), process.env.WHATSAPP_APP_SECRET), null);
 
+    process.env.WHATSAPP_DECISION_TEMPLATE_NAME = 'pedido_con_dos_botones';
+    await whatsapp.sendOrderNotice({ id: 18, name: 'Cliente de prueba', total: 10000, pickup_date: '2026-11-24', pickup_hour: 7, items: [{ color: 'ROJOS', grade: 'NACIONAL', bunches: 1 }] });
+    assert.equal(sent[1].template.name, 'pedido_con_dos_botones');
+    const buttons = sent[1].template.components.slice(1);
+    assert.deepEqual(buttons.map(button => button.index), ['0', '1']);
+    const approve = buttons[0].parameters[0].payload;
+    const reject = buttons[1].parameters[0].payload;
+    assert.deepEqual(whatsapp.payloadDecision(approve, process.env.WHATSAPP_APP_SECRET), { orderId: 18, decision: 'APROBADO' });
+    assert.deepEqual(whatsapp.payloadDecision(reject, process.env.WHATSAPP_APP_SECRET), { orderId: 18, decision: 'RECHAZADO' });
+    assert.equal(whatsapp.payloadDecision(reject.replace('rechazar:', 'aprobar:'), process.env.WHATSAPP_APP_SECRET), null);
+    assert.equal(whatsapp.payloadDecision(reject.replace('18:', '19:'), process.env.WHATSAPP_APP_SECRET), null);
+    assert.equal(whatsapp.approvedPayloadOrderId(reject, process.env.WHATSAPP_APP_SECRET), null);
+
     await whatsapp.sendCustomerApproval({ id: 17, name: 'Cliente de prueba', phone: '3123272558', total: 10000, pickup_date: '2026-11-24', pickup_hour: 7 });
-    assert.equal(sent[1].to, '573123272558');
-    assert.equal(sent[1].template.name, 'pedido_aprobado');
-    assert.deepEqual(sent[1].template.components[0].parameters.map(p => p.text), ['Cliente de prueba', '17', '10.000', '2026-11-24 a las 07:00']);
+    assert.equal(sent[2].to, '573123272558');
+    assert.equal(sent[2].template.name, 'pedido_aprobado');
+    assert.deepEqual(sent[2].template.components[0].parameters.map(p => p.text), ['Cliente de prueba', '17', '10.000', '2026-11-24 a las 07:00']);
   } finally { global.fetch = originalFetch; }
 });
