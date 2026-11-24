@@ -36,9 +36,16 @@ async function sendOrderNotice(order) {
   const reviewUrl = `${settings.publicUrl}/?pedido=${order.id}`;
   const items = Array.isArray(order.items) ? order.items : [];
   if (!items.length) throw new Error('El pedido no tiene productos para notificar.');
-  const pickup = order.pickup_date ? `Recogida: ${String(order.pickup_date).slice(0, 10)} a las ${String(order.pickup_hour).padStart(2, '0')}:00; ` : '';
-  const fullDetail = pickup + items.map(item => `${item.color} / ${item.grade}: ${item.bunches} ramos`).join('; ');
-  const detail = fullDetail.length <= 850 ? fullDetail : `${fullDetail.slice(0, 820)}... Ver pedido completo en el enlace.`;
+  const lines = [];
+  if (order.pickup_date) lines.push(`*Recogida:* ${String(order.pickup_date).slice(0, 10)} a las ${String(order.pickup_hour).padStart(2, '0')}:00`);
+  let truncated = false;
+  for (const item of items) {
+    const line = `• *${item.color}* — ${item.grade}: ${item.bunches} ${item.bunches === 1 ? 'ramo' : 'ramos'}`;
+    if ([...lines, line].join('\n').length > 800) { truncated = true; break; }
+    lines.push(line);
+  }
+  if (truncated) lines.push('… Ver el resto del pedido en el enlace.');
+  const detail = `\n${lines.join('\n')}`;
   const payload = {
     messaging_product: 'whatsapp',
     to: adminPhone,
@@ -52,7 +59,7 @@ async function sendOrderNotice(order) {
           { type: 'text', text: String(order.id) },
           { type: 'text', text: String(order.name) },
           { type: 'text', text: detail },
-          { type: 'text', text: String(order.total) },
+          { type: 'text', text: new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 }).format(Number(order.total)) },
           { type: 'text', text: reviewUrl }
         ]
       }]
