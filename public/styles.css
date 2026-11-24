@@ -162,3 +162,4 @@ dialog { border: 0; padding: 0; background: transparent; max-width: none; } dial
   .doc-table tr { break-inside: avoid; page-break-inside: avoid; }
   @page { size: A4 portrait; margin: 0; }
 }
+.brand-logo-inline{display:block;width:150px;height:auto;max-width:100%;background:#fff;border-radius:6px;padding:4px}.mobile-brand .brand-logo-inline{width:175px}.sidebar .brand{align-items:flex-start;flex-direction:column;gap:7px}.sidebar .brand>span{color:#bdd8c8;font-size:.72rem}

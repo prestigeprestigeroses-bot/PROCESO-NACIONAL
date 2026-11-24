@@ -36,7 +36,8 @@ async function sendOrderNotice(order) {
   const reviewUrl = `${settings.publicUrl}/?pedido=${order.id}`;
   const items = Array.isArray(order.items) ? order.items : [];
   if (!items.length) throw new Error('El pedido no tiene productos para notificar.');
-  const fullDetail = items.map(item => `${item.color} / ${item.grade}: ${item.bunches} ramos`).join('; ');
+  const pickup = order.pickup_date ? `Recogida: ${String(order.pickup_date).slice(0, 10)} a las ${String(order.pickup_hour).padStart(2, '0')}:00; ` : '';
+  const fullDetail = pickup + items.map(item => `${item.color} / ${item.grade}: ${item.bunches} ramos`).join('; ');
   const detail = fullDetail.length <= 850 ? fullDetail : `${fullDetail.slice(0, 820)}... Ver pedido completo en el enlace.`;
   const payload = {
     messaging_product: 'whatsapp',

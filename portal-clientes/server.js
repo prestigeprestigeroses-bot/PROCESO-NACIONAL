@@ -143,7 +143,7 @@ async function processWhatsAppQueue() {
       finally { connection.release(); }
       if (!job) break;
       try {
-        const { rows } = await pool.query('SELECT o.id,o.total,c.name FROM portal_orders o JOIN portal_customers c ON c.id=o.customer_id WHERE o.id=$1', [job.order_id]);
+        const { rows } = await pool.query("SELECT o.id,o.total,to_char(o.pickup_date,'YYYY-MM-DD') AS pickup_date,o.pickup_hour,c.name FROM portal_orders o JOIN portal_customers c ON c.id=o.customer_id WHERE o.id=$1", [job.order_id]);
         if (!rows[0]) throw new Error('Pedido no encontrado.');
         const { rows: items } = await pool.query('SELECT color,grade,bunches FROM portal_order_items WHERE order_id=$1 ORDER BY id', [job.order_id]);
         const messageId = await whatsapp.sendOrderNotice({ ...rows[0], items });
@@ -167,7 +167,7 @@ async function init() {
     );
     CREATE TABLE IF NOT EXISTS portal_orders (
       id BIGSERIAL PRIMARY KEY, customer_id BIGINT NOT NULL REFERENCES portal_customers(id), status VARCHAR(20) NOT NULL DEFAULT 'PENDIENTE',
-      total NUMERIC(14,2) NOT NULL DEFAULT 0, notes TEXT NOT NULL DEFAULT '', rejection_reason TEXT NOT NULL DEFAULT '',
+      total NUMERIC(14,2) NOT NULL DEFAULT 0, notes TEXT NOT NULL DEFAULT '', pickup_date DATE, pickup_hour SMALLINT, rejection_reason TEXT NOT NULL DEFAULT '',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), decided_at TIMESTAMPTZ
     );
     CREATE TABLE IF NOT EXISTS portal_order_items (
@@ -184,6 +184,8 @@ async function init() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
+  await pool.query('ALTER TABLE portal_orders ADD COLUMN IF NOT EXISTS pickup_date DATE');
+  await pool.query('ALTER TABLE portal_orders ADD COLUMN IF NOT EXISTS pickup_hour SMALLINT');
   const count = await pool.query('SELECT COUNT(*)::int AS n FROM portal_prices');
   if (!count.rows[0].n) {
     for (const [grade, price] of [['NACIONAL', 10000], ['BAJAS', 12000], ['NACIONAL GRANEL', 8000], ['BAJAS GRANEL', 7000]]) {
@@ -222,6 +224,15 @@ app.post('/api/orders', auth('customer'), async (req, res) => {
   try {
     const items = Array.isArray(req.body.items) ? req.body.items : [];
     if (!items.length || items.length > 40) throw new Error('Selecciona al menos un producto.');
+    const pickupDate = String(req.body.pickupDate || '');
+    const pickupHour = Number(req.body.pickupHour);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(pickupDate) || req.body.pickupHour === '' || req.body.pickupHour == null || !Number.isSafeInteger(pickupHour) || pickupHour < 0 || pickupHour > 23) throw new Error('Selecciona el día y la hora de recogida.');
+    const selectedDate = new Date(`${pickupDate}T12:00:00Z`);
+    if (Number.isNaN(selectedDate.getTime()) || selectedDate.toISOString().slice(0, 10) !== pickupDate) throw new Error('Selecciona una fecha válida.');
+    const lastPickupHour = selectedDate.getUTCDay() === 2 ? 14 : 13;
+    if (pickupHour < 6 || pickupHour > lastPickupHour) throw new Error(`El horario de recogida es de 6 a. m. a ${lastPickupHour === 14 ? '2' : '1'} p. m. ese día.`);
+    const todayParts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Bogota', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()).map(part => [part.type, part.value]));
+    if (pickupDate < `${todayParts.year}-${todayParts.month}-${todayParts.day}`) throw new Error('El día de recogida no puede estar en el pasado.');
     await client.query('BEGIN');
     await client.query("SELECT pg_advisory_xact_lock(hashtext('portal-orders'))");
     const catalog = await availability(); const p = await prices();
@@ -235,7 +246,7 @@ app.post('/api/orders', auth('customer'), async (req, res) => {
     validateAvailability([...requested].map(([key, bunches]) => {
       const [color, grade] = key.split('|'); return { color, grade, bunches };
     }), catalog);
-    const order = await client.query('INSERT INTO portal_orders(customer_id,total,notes) VALUES($1,$2,$3) RETURNING id', [req.session.id, total, String(req.body.notes || '').trim().slice(0, 1000)]);
+    const order = await client.query('INSERT INTO portal_orders(customer_id,total,notes,pickup_date,pickup_hour) VALUES($1,$2,$3,$4,$5) RETURNING id', [req.session.id, total, String(req.body.notes || '').trim().slice(0, 1000), pickupDate, pickupHour]);
     for (const [key, bunches] of requested) { const [color, grade] = key.split('|'); await client.query('INSERT INTO portal_order_items(order_id,color,grade,bunches,price_per_bunch,subtotal) VALUES($1,$2,$3,$4,$5,$6)', [order.rows[0].id, color, grade, bunches, p[grade], bunches * p[grade]]); }
     await client.query('INSERT INTO portal_whatsapp_notifications(order_id) VALUES($1)', [order.rows[0].id]);
     await client.query('COMMIT');
