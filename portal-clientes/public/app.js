@@ -20,7 +20,7 @@ function updatePickupHours() {
 updatePickupHours();
 $('pickup-date').addEventListener('change', updatePickupHours);
 $('pickup-date').addEventListener('click', event => { try { event.currentTarget.showPicker?.(); } catch { event.currentTarget.focus(); } });
-let role = null, catalog = [], prices = {}, cart = new Map(), lastPending = null, automaticWhatsApp = false, adminCustomers = [];
+let role = null, catalog = [], prices = {}, cart = new Map(), lastPending = null, automaticWhatsApp = false, adminCustomers = [], adminInventory = [];
 async function api(url, options = {}) { const res = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', ...options.headers } }); const body = await res.json(); if (!res.ok) throw new Error(body.error || 'No se pudo completar la solicitud.'); return body; }
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 function show(id) { for (const name of ['login','customer','admin']) $(name).classList.toggle('hidden', name !== id); $('logout').classList.toggle('hidden', id === 'login'); $('cart-bar').classList.toggle('hidden', id !== 'customer' || cart.size === 0); }
@@ -47,6 +47,27 @@ function renderCustomers(customers) {
   adminCustomers = customers;
   $('customer-count').textContent = customers.length;
   $('admin-customers').innerHTML = customers.map(customer => `<div class="customer-row"><div><strong>${esc(customer.name)}</strong><span>${customer.login_identifier ? `Usuario: ${esc(customer.login_identifier)} · ` : ''}WhatsApp: ${esc(customer.phone)} · ${customer.active ? 'Activo' : 'Inactivo'}</span></div><div class="customer-actions"><button class="secondary" type="button" data-edit-customer="${customer.id}">Editar</button><button class="danger" type="button" data-delete-customer="${customer.id}">Eliminar</button></div></div>`).join('') || '<p class="catalog-hint">Todavía no hay clientes registrados.</p>';
+}
+function renderAdminInventory() {
+  const container = $('admin-inventory');
+  const openCells = new Set([...container.querySelectorAll('details[open]')].map(details => details.dataset.cell));
+  const grade = $('inventory-grade').value;
+  const cells = adminInventory.filter(cell => !grade || cell.grade === grade);
+  const totals = cells.reduce((sum, cell) => {
+    for (const key of ['real', 'pending', 'approved', 'available', 'shortage']) sum[key] += cell[key];
+    return sum;
+  }, { real: 0, pending: 0, approved: 0, available: 0, shortage: 0 });
+  $('inventory-summary').innerHTML = `<strong>Inventario real: ${totals.real}</strong><span>Pendientes: ${totals.pending}</span><span>Aprobados: ${totals.approved}</span><strong>Disponible: ${totals.available}</strong>${totals.shortage ? `<strong class="inventory-shortage">Faltan ${totals.shortage} ramos para cubrir todas las reservas</strong>` : ''}`;
+  cells.sort((a, b) => gradeOrder.indexOf(a.grade) - gradeOrder.indexOf(b.grade) || Object.keys(swatches).indexOf(a.color) - Object.keys(swatches).indexOf(b.color));
+  container.innerHTML = cells.map(cell => {
+    const cellKey = `${cell.color}|${cell.grade}`;
+    return `<article class="inventory-card ${cell.shortage ? 'inventory-card--shortage' : ''}" style="--inventory-color:${swatches[cell.color] || '#5f8c70'}"><h3>${esc(cell.color)}<small>${esc(gradeNames[cell.grade] || cell.grade)}</small></h3><div class="inventory-figures"><span>Real<strong>${cell.real}</strong></span><span>Pendientes<strong>${cell.pending}</strong></span><span>Aprobados<strong>${cell.approved}</strong></span><span>Disponible<strong>${cell.available}</strong></span></div>${cell.shortage ? `<p class="inventory-shortage">Faltan ${cell.shortage} ramos para cubrir las reservas.</p>` : ''}${cell.orders.length ? `<details data-cell="${esc(cellKey)}" ${openCells.has(cellKey) ? 'open' : ''}><summary>Ver ${cell.orders.length} pedido${cell.orders.length === 1 ? '' : 's'}</summary><ul>${cell.orders.map(order => `<li><strong>#${esc(order.id)}</strong> · ${esc(order.name)} · ${order.bunches} ramos · ${esc(order.status.toLowerCase())}</li>`).join('')}</ul></details>` : '<p class="inventory-no-orders">Sin pedidos reservados</p>'}</article>`;
+  }).join('') || '<p>No hay ramos ni reservas para este grado.</p>';
+}
+async function loadAdminInventory() {
+  const data = await api('/api/admin/inventory');
+  adminInventory = data.inventory;
+  renderAdminInventory();
 }
 function renderAdminOrders(orders) {
   const container = $('admin-orders');
@@ -85,6 +106,7 @@ async function loadAdmin() {
   if (lastPending !== null && pending > lastPending) { toast(`Hay ${pending - lastPending} pedido(s) nuevo(s).`); if (Notification.permission === 'granted') new Notification('Prestige Roses', { body: 'Hay pedidos nuevos para revisar.' }); }
   lastPending = pending;
   renderCustomers(data.customers);
+  await loadAdminInventory().catch(error => { $('inventory-summary').textContent = `No se pudo cargar el inventario: ${error.message}`; });
 }
 async function init() { const s = await api('/api/session'); role = s.role; if (role === 'customer') { show('customer'); $('greeting').textContent = `Hola, ${s.name} 👋`; await loadCatalog(); await loadMyOrders(); } else if (role === 'admin') { show('admin'); await loadAdmin(); if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission(); } else show('login'); }
 $('login-form').addEventListener('submit', async e => { e.preventDefault(); $('login-error').textContent=''; try { await api('/api/login', { method:'POST',body:JSON.stringify({ role:$('admin-mode').checked?'admin':'customer',phone:$('phone').value,password:$('password').value }) }); $('password').value=''; await init(); } catch (err) { $('login-error').textContent=err.message; } });
@@ -122,5 +144,7 @@ $('admin-orders').addEventListener('click', async e => { const b=e.target.closes
 $('admin-orders').addEventListener('click', async e => { const button = e.target.closest('[data-delete-order]'); if (!button) return; if (!confirm(`¿Eliminar el pedido #${button.dataset.deleteOrder}? Esta acción no se puede deshacer.`)) return; button.disabled = true; try { await api(`/api/admin/orders/${button.dataset.deleteOrder}`, { method:'DELETE' }); await loadAdmin(); toast('Pedido eliminado.'); } catch (error) { toast(error.message); button.disabled = false; } });
 $('admin-orders').addEventListener('click', async e => { const button = e.target.closest('[data-cancel-order]'); if (!button) return; if (!confirm(`¿Cancelar el pedido #${button.dataset.cancelOrder} y devolver sus ramos al portal?`)) return; button.disabled = true; try { await api(`/api/admin/orders/${button.dataset.cancelOrder}/cancel`, { method:'POST' }); await loadAdmin(); toast('Pedido cancelado. Los ramos volvieron a estar disponibles.'); } catch (error) { toast(error.message); button.disabled = false; } });
 $('admin-refresh').addEventListener('click', () => loadAdmin().catch(e => toast(e.message)));
+$('inventory-refresh').addEventListener('click', () => loadAdminInventory().then(() => toast('Inventario actualizado.')).catch(error => toast(error.message)));
+$('inventory-grade').addEventListener('change', renderAdminInventory);
 setInterval(() => { if(role==='customer') Promise.all([loadCatalog(),loadMyOrders()]).catch(()=>{}); if(role==='admin') loadAdmin().catch(()=>{}); },10000);
 init().catch(e => { $('login-error').textContent=e.message; show('login'); });

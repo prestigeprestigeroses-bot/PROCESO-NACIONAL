@@ -14,6 +14,8 @@ Los clientes entran con su teléfono o un usuario con letras y su clave. El admi
 
 El portal consulta el inventario real de Nacional y resta las cantidades reservadas por sus pedidos pendientes y aprobados, guardadas en `portal_inventory_reservations`. Al rechazar, cancelar o eliminar un pedido, se libera su reserva. Para colores surtidos, la reserva se distribuye entre colores distintos de rojos. Las tablas de escaneos, ajustes y remisiones son solo de lectura para el portal. Los pedidos anteriores a esta función no generan reservas retroactivas, salvo que estuvieran pendientes y se aprueben después de la actualización. Si la misma venta se registra además como remisión, la disminución real y la reserva del portal se sumarán visualmente; para evitarlo de forma exacta sería necesario vincular el pedido con esa remisión.
 
+En administración, **Inventario real y pedidos** muestra por color y grado los ramos del inventario de Nacional, los reservados por pedidos pendientes, los reservados por pedidos aprobados y los disponibles para nuevos pedidos. Cada casilla permite ver los clientes y números de pedido que ocupan la reserva. Si las reservas superan el inventario real, se indica el faltante; la aprobación de un pedido pendiente volverá a comprobar la cantidad disponible.
+
 Cada pedido nuevo pide día y hora de recogida (hora completa, sin minutos). Las horas van desde las 6 a. m. hasta la 1 p. m., excepto los martes, cuando llegan hasta las 2 p. m. Ambos datos se guardan en el pedido, se muestran al cliente y al administrador y se incluyen en el aviso de WhatsApp. El cliente ve una confirmación grande cuando se registra la solicitud; la aprobación comercial sigue pendiente. El administrador consulta los pedidos agrupados por día de recogida.
 
 Cuando el portal tiene configurada la **WhatsApp Business Platform**, al registrar un pedido solicita automáticamente a Meta que envíe un aviso a **+57 300 254 3548** (o al número definido en `WHATSAPP_ADMIN_PHONE`). El aviso incluye número de pedido, cliente, colores, grados, cantidades, total estimado y un enlace para abrirlo desde el teléfono. Si el detalle es demasiado largo, el mensaje muestra el inicio y el enlace permite ver el pedido completo. El administrador inicia sesión en el portal desde ese enlace y aprueba o rechaza. Sin la configuración adicional de aprobación por botón, al decidir se abre un mensaje preparado para responder al cliente manualmente.
@@ -37,18 +39,16 @@ Para activar esta función, además de las variables de la sección anterior, co
 Texto sugerido para la plantilla del administrador (cinco variables en el cuerpo, dos botones de respuesta rápida **Aprobar pedido** y **Rechazar pedido**, en ese orden):
 
 ```text
-Prestige Roses recibió un nuevo pedido.
+Nuevo pedido en Prestige Roses: #{{1}}
 
-*Pedido:* #{{1}}
-*Cliente:* {{2}}
+{{2}}
 
-*Recogida y productos:* {{3}}
+{{3}}
 
 *Total estimado:* COP {{4}}
-
 *Ver pedido:* {{5}}
 
-Revisa los detalles antes de aprobar o rechazar.
+Elige Aprobar pedido o Rechazar pedido.
 ```
 
 Texto sugerido para la plantilla al cliente (cuatro variables en el cuerpo):

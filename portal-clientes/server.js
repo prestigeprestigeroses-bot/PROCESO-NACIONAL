@@ -8,6 +8,7 @@ const express = require('express');
 const { Pool } = require('pg');
 const { listInventory } = require('./inventory');
 const { allocateReservations, applyReservations } = require('./reservations');
+const { buildInventoryOverview } = require('./inventory-overview');
 const whatsapp = require('./whatsapp');
 
 if (!process.env.DATABASE_URL) throw new Error('Configure DATABASE_URL en las variables del servicio o en portal-clientes/.env');
@@ -313,6 +314,26 @@ app.get('/api/admin', auth('admin'), async (_req, res) => {
     ]);
     res.json({ orders: orders.rows, customers: customers.rows, prices: p, automaticWhatsApp: Boolean(whatsapp.config()), automaticApproval: Boolean(whatsapp.approvalConfig()), whatsappConfigurationIssues: whatsapp.configurationIssues(), approvalConfigurationIssues: whatsapp.approvalConfigurationIssues() });
   } catch (e) { fail(res, e, 500); }
+});
+app.get('/api/admin/inventory', auth('admin'), async (_req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    const root = summarize(await listInventory(client));
+    const { rows: reservations } = await client.query(`
+      SELECT o.id AS order_id,o.status,c.name,r.color,r.grade,SUM(r.bunches)::int AS bunches
+      FROM portal_inventory_reservations r
+      JOIN portal_orders o ON o.id=r.order_id
+      JOIN portal_customers c ON c.id=o.customer_id
+      WHERE o.status IN ('PENDIENTE','APROBADO')
+      GROUP BY o.id,o.status,c.name,r.color,r.grade
+      ORDER BY o.id DESC
+    `);
+    await client.query('COMMIT');
+    const inventory = buildInventoryOverview(root, reservations, grades, assortedColor);
+    res.json({ inventory, updatedAt: new Date().toISOString() });
+  } catch (error) { await client.query('ROLLBACK'); fail(res, error, 500); }
+  finally { client.release(); }
 });
 app.post('/api/admin/customers', auth('admin'), async (req, res) => {
   try {

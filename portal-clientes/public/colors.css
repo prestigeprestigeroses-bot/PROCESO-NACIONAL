@@ -14,3 +14,26 @@
 .notice-state { background: #fff6dc; color: #725306; border: 1px solid #ecd49b; border-radius: 10px; padding: 12px 15px; font-size: 13px; margin: 16px 0 0; }
 .notice-status { font-size: 12px; margin: 0 0 12px; }
 #login-form .admin-check { justify-content: center; margin-top: 30px; padding-top: 18px; border-top: 1px solid #d9e5d9; }
+.admin-section--inventory { background: linear-gradient(135deg, #e8f5ed, #f5f9ed); border-color: #b9d8c3; border-left: 6px solid #28794d; }
+.admin-section--inventory h2 { color: #20583c; }
+.inventory-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.inventory-controls label { margin: 0; }
+.inventory-controls select { width: min(100%, 260px); padding: 10px 12px; border: 1px solid #a9cdb7; border-radius: 10px; background: #fff; font: inherit; }
+.inventory-summary { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
+.inventory-summary span, .inventory-summary strong { padding: 8px 11px; border-radius: 9px; background: #fff; border: 1px solid #c9dfd0; color: #20583c; font-size: 13px; }
+.inventory-overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 270px), 1fr)); gap: 12px; }
+.inventory-card { min-width: 0; padding: 16px; border: 1px solid #cfdfd1; border-left: 5px solid var(--inventory-color); border-radius: 14px; background: #fff; }
+.inventory-card--shortage { border-color: #db9b8f; border-left-color: #bd473a; background: #fffafa; }
+.inventory-card h3 { margin: 0 0 14px; font-size: 17px; }
+.inventory-card h3 small { display: block; margin-top: 3px; color: #53675a; font-size: 13px; font-weight: 500; }
+.inventory-figures { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px; }
+.inventory-figures span { padding: 9px; border-radius: 9px; background: #f1f7f2; color: #526158; font-size: 12px; }
+.inventory-figures strong { display: block; margin-top: 3px; color: #173c2b; font-size: 21px; }
+.inventory-card details { margin-top: 13px; border-top: 1px solid #e0e9e1; padding-top: 10px; }
+.inventory-card summary { cursor: pointer; color: #20583c; font-weight: 700; }
+.inventory-card ul { margin: 10px 0 0; padding-left: 19px; color: #35493b; font-size: 13px; line-height: 1.6; }
+.inventory-card li { overflow-wrap: anywhere; }
+.inventory-card .inventory-shortage, .inventory-summary .inventory-shortage { color: #9d3024; }
+.inventory-no-orders, .inventory-footnote { color: #53675a; font-size: 13px; }
+.inventory-no-orders { margin: 12px 0 0; }
+.inventory-footnote { margin: 16px 0 0; }

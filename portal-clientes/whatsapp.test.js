@@ -30,8 +30,15 @@ test('el botón identifica el pedido y la confirmación usa el teléfono del cli
     assert.equal(whatsapp.approvedPayloadOrderId(payload.replace('17:', '18:'), process.env.WHATSAPP_APP_SECRET), null);
 
     process.env.WHATSAPP_DECISION_TEMPLATE_NAME = 'pedido_con_dos_botones';
-    await whatsapp.sendOrderNotice({ id: 18, name: 'Cliente de prueba', total: 10000, pickup_date: '2026-11-24', pickup_hour: 7, items: [{ color: 'ROJOS', grade: 'NACIONAL', bunches: 1 }] });
+    await whatsapp.sendOrderNotice({ id: 18, name: 'Cliente de prueba', total: 10000, pickup_date: '2026-11-25', pickup_hour: 8, items: [
+      { color: 'ROJOS', grade: 'BAJAS', bunches: 20 },
+      { color: 'BLANCOS', grade: 'BAJAS', bunches: 12 },
+      { color: 'ROSADOS CLAROS', grade: 'BAJAS', bunches: 30 },
+      { color: 'BLANCOS', grade: 'NACIONAL', bunches: 11 }
+    ] });
     assert.equal(sent[1].template.name, 'pedido_con_dos_botones');
+    assert.equal(sent[1].template.components[0].parameters[1].text, '*Cliente de prueba*');
+    assert.equal(sent[1].template.components[0].parameters[2].text, '*Recogida:* 25/11/2026 a las 8:00\n\n*BAJAS*\n• Rojos: 20 ramos\n• Blancos: 12 ramos\n• Rosados claros: 30 ramos\n\n*NACIONAL*\n• Blancos: 11 ramos');
     const buttons = sent[1].template.components.slice(1);
     assert.deepEqual(buttons.map(button => button.index), ['0', '1']);
     const approve = buttons[0].parameters[0].payload;

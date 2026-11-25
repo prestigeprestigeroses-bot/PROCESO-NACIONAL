@@ -111,21 +111,35 @@ async function sendOrderNotice(order) {
   const reviewUrl = `${settings.publicUrl}/?pedido=${order.id}`;
   const items = Array.isArray(order.items) ? order.items : [];
   if (!items.length) throw new Error('El pedido no tiene productos para notificar.');
-  const parts = [];
-  if (order.pickup_date) parts.push(`*Recogida:* ${String(order.pickup_date).slice(0, 10)} a las ${String(order.pickup_hour).padStart(2, '0')}:00`);
-  let truncated = false;
+  const pickup = order.pickup_date ? String(order.pickup_date).slice(0, 10).split('-') : null;
+  let detail = pickup?.length === 3 ? `*Recogida:* ${pickup[2]}/${pickup[1]}/${pickup[0]} a las ${Number(order.pickup_hour)}:00` : '*Recogida:* Por coordinar';
+  const groups = new Map();
   for (const item of items) {
-    const part = `*${item.color}* — ${item.grade}: ${item.bunches} ${item.bunches === 1 ? 'ramo' : 'ramos'}`;
-    if ([...parts, part].join(' | ').length > 650) { truncated = true; break; }
-    parts.push(part);
+    if (!groups.has(item.grade)) groups.set(item.grade, new Map());
+    const colors = groups.get(item.grade);
+    colors.set(item.color, (colors.get(item.color) || 0) + Number(item.bunches));
   }
-  if (truncated) parts.push('Ver el resto del pedido en el enlace');
-  const detail = parts.join(' | ');
+  const gradeOrder = ['BAJAS', 'NACIONAL', 'BAJAS GRANEL', 'NACIONAL GRANEL', 'EXPORTACION GRANEL'];
+  let truncated = false;
+  for (const grade of [...groups.keys()].sort((a, b) => gradeOrder.indexOf(a) - gradeOrder.indexOf(b))) {
+    const heading = `\n\n*${grade}*`;
+    let addedHeading = false;
+    for (const [color, bunches] of groups.get(grade)) {
+      const label = color.charAt(0) + color.slice(1).toLocaleLowerCase('es-CO');
+      const line = `\n• ${label}: ${bunches} ${bunches === 1 ? 'ramo' : 'ramos'}`;
+      const next = `${addedHeading ? '' : heading}${line}`;
+      if (detail.length + next.length > 610) { truncated = true; break; }
+      detail += next;
+      addedHeading = true;
+    }
+    if (truncated) break;
+  }
+  if (truncated) detail += '\n• Ver el resto del pedido en el enlace';
   const approval = approvalConfig();
   const buttons = approval ? [{ type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: decisionPayload(order.id, 'APROBADO', approval.appSecret) }] }] : [];
   if (approval?.decisionTemplate) buttons.push({ type: 'button', sub_type: 'quick_reply', index: '1', parameters: [{ type: 'payload', payload: decisionPayload(order.id, 'RECHAZADO', approval.appSecret) }] });
   return sendTemplate(settings, adminPhone, approval?.decisionTemplate || approval?.approvalTemplate || settings.template, [
-    order.id, order.name, detail,
+    order.id, `*${order.name}*`, detail,
     new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 }).format(Number(order.total)), reviewUrl
   ], buttons);
 }
