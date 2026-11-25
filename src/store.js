@@ -2,7 +2,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { Pool } = require('pg');
-const { colorOf, norm, checkProtectedStock, linkPortalOrders } = require('../portal-clientes/portal-link');
 
 const usePostgres = Boolean(process.env.DATABASE_URL);
 const dataDirectory = path.join(process.cwd(), '.data');
@@ -282,9 +281,6 @@ async function init() {
     CREATE INDEX IF NOT EXISTS idx_inventory_adjustments_source ON inventory_adjustments(source_date,variety,grade_cm,stems_per_bunch);
     CREATE INDEX IF NOT EXISTS idx_inventory_waste_source ON inventory_waste(source_date,variety,grade_cm,stems_per_bunch);
   `);
-  if ((await pool.query("SELECT to_regclass('public.portal_orders') AS portal_orders")).rows[0].portal_orders) {
-    await pool.query('ALTER TABLE portal_orders ADD COLUMN IF NOT EXISTS remission_id BIGINT REFERENCES remissions(id) ON DELETE SET NULL');
-  }
 
   const countResult = await pool.query('SELECT COUNT(*)::int AS count FROM inventory');
   const shouldSeedDemo = process.env.SEED_DEMO_DATA === 'true';
@@ -337,14 +333,14 @@ function mapRemission(row, items = []) {
   };
 }
 
-async function listInventory(includeZero = false, connection = pool) {
+async function listInventory(includeZero = false) {
   if (!usePostgres) {
     return [...memory.inventory].map(item => {
       const normalized = { ...item, date: dateOnly(item.date ?? item.updatedAt), gradeCm: item.gradeCm || 'NACIONAL' };
       return { ...normalized, id: inventoryKey(normalized), key: inventoryKey(normalized) };
     }).filter(item => item.date >= inventoryStartDate() && (includeZero || item.bunches > 0)).sort((a, b) => b.date.localeCompare(a.date) || a.variety.localeCompare(b.variety));
   }
-  const result = await connection.query(`
+  const result = await pool.query(`
     WITH scanned AS (
       SELECT ts::date AS source_date,
              TRIM(variedad_nombre) AS variety,
@@ -435,37 +431,6 @@ async function availableLot(client, lot) {
   return Number(row.scanned) + Number(row.incoming) - Number(row.outgoing) - Number(row.sold) - Number(row.exported) - Number(row.wasted) + Number(row.adjusted);
 }
 
-async function protectPortalReservations(client, reductions, linkedOrderIds = []) {
-  if (!reductions.length) return;
-  const present = await client.query("SELECT to_regclass('public.portal_inventory_reservations') AS reservations");
-  if (!present.rows[0].reservations) return;
-  const lots = await listInventory(false, client);
-  const real = new Map();
-  for (const lot of lots) {
-    const color = colorOf.get(norm(lot.variety));
-    if (!color) continue;
-    const key = `${color}|${norm(lot.gradeCm)}`;
-    real.set(key, (real.get(key) || 0) + Number(lot.bunches));
-  }
-  const { rows } = await client.query(`
-    SELECT r.color,r.grade,SUM(r.bunches)::int AS bunches
-    FROM portal_inventory_reservations r JOIN portal_orders o ON o.id=r.order_id
-    LEFT JOIN remissions m ON m.id=o.remission_id
-    WHERE o.status IN ('PENDIENTE','APROBADO') AND (m.id IS NULL OR m.status<>'FINALIZADA')
-      AND NOT (o.id=ANY($1::bigint[]))
-    GROUP BY r.color,r.grade
-  `, [linkedOrderIds]);
-  const reserved = new Map(rows.map(row => [`${norm(row.color)}|${norm(row.grade)}`, Number(row.bunches)]));
-  const outgoing = new Map();
-  for (const item of reductions) {
-    const color = colorOf.get(norm(item.variety));
-    if (!color) continue;
-    const key = `${color}|${norm(item.gradeCm)}`;
-    outgoing.set(key, (outgoing.get(key) || 0) + Number(item.bunches));
-  }
-  checkProtectedStock(real, reserved, outgoing);
-}
-
 async function listInventoryAdjustments(limit = 1000) {
   if (!usePostgres) return [...memory.adjustments].reverse().slice(0, limit);
   const result = await pool.query('SELECT * FROM inventory_adjustments ORDER BY created_at DESC,id DESC LIMIT $1', [limit]);
@@ -493,7 +458,6 @@ async function cancelInventoryAdjustment(id, input) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query("SELECT pg_advisory_xact_lock(hashtext('portal-orders'))");
     const selected = await client.query('SELECT * FROM inventory_adjustments WHERE id=$1 FOR UPDATE', [adjustmentId]);
     const row = selected.rows[0];
     if (!row || row.canceled_at) throw new Error('Ajuste no encontrado o ya anulado.');
@@ -505,7 +469,6 @@ async function cancelInventoryAdjustment(id, input) {
       const available = await availableLot(client, lots[index]);
       if (available - Number(rows[index].delta_bunches) < 0) throw new Error('No se puede anular: los ramos agregados por el ajuste ya no están disponibles.');
     }
-    await protectPortalReservations(client, rows.filter(item => Number(item.delta_bunches) > 0).map(item => ({ variety: item.variety, gradeCm: item.grade_cm, bunches: Number(item.delta_bunches) })));
     const updated = row.batch_id
       ? await client.query('UPDATE inventory_adjustments SET canceled_at=NOW(),cancellation_reason=$2 WHERE batch_id=$1 RETURNING *', [row.batch_id, reason])
       : await client.query('UPDATE inventory_adjustments SET canceled_at=NOW(),cancellation_reason=$2 WHERE id=$1 RETURNING *', [adjustmentId, reason]);
@@ -559,14 +522,12 @@ async function reconcileInventoryGroup(input) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query("SELECT pg_advisory_xact_lock(hashtext('portal-orders'))");
     for (const key of [...new Set(sources.map(row => row.key))].sort()) await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [key]);
     const latestSources = (await listInventory(true)).filter(row => row.variety === variety && row.gradeCm === gradeCm);
     if (latestSources.length !== sources.length || latestSources.some(row => !sources.some(source => source.key === row.key))) throw new Error('El inventario cambió. Actualice la página antes de conciliar.');
     const current = [];
     for (const row of sources) current.push({ ...row, bunches: await availableLot(client, row) });
     const plan = makePlan(current);
-    await protectPortalReservations(client, plan.filter(item => item.delta < 0).map(({ row, delta }) => ({ variety: row.variety, gradeCm: row.gradeCm, bunches: -delta })));
     for (const { row, delta } of plan) await client.query(`INSERT INTO inventory_adjustments (source_date,variety,grade_cm,stems_per_bunch,before_bunches,counted_bunches,delta_bunches,responsible,reason,batch_id,group_before_bunches,group_counted_bunches) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, [row.date, variety, gradeCm, row.stemsPerBunch, row.bunches, row.bunches + delta, delta, responsible, reason, batchId, expectedBunches, countedBunches]);
     await client.query('COMMIT');
     return { batchId, variety, gradeCm, beforeBunches: expectedBunches, countedBunches };
@@ -597,12 +558,10 @@ async function reconcileInventory(input) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query("SELECT pg_advisory_xact_lock(hashtext('portal-orders'))");
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [key]);
     const current = await availableLot(client, source);
     if (current !== expectedBunches) throw new Error('El inventario cambió. Actualice la página antes de conciliar.');
     const deltaBunches = countedBunches - current;
-    if (deltaBunches < 0) await protectPortalReservations(client, [{ variety: source.variety, gradeCm: source.gradeCm, bunches: -deltaBunches }]);
     const saved = await client.query(`INSERT INTO inventory_adjustments (source_date,variety,grade_cm,stems_per_bunch,before_bunches,counted_bunches,delta_bunches,responsible,reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`, [source.sourceDate, source.variety, source.gradeCm, source.stemsPerBunch, current, countedBunches, deltaBunches, responsible, reason]);
     await client.query('COMMIT');
     const row = saved.rows[0];
@@ -837,9 +796,7 @@ function bunchText(value) {
 
 async function createRemission(input) {
   const { details, items } = cleanRemissionInput(input);
-  const portalOrderIds = Array.isArray(input.portalOrderIds) ? input.portalOrderIds.map(Number) : [];
   if (!usePostgres) {
-    if (portalOrderIds.length) throw new Error('Para vincular pedidos del portal se necesita PostgreSQL.');
     const selected = items.map(requested => {
       if (requested.type === 'eucalyptus') return { stock: null, requested, decoded: { variety: 'EUCALIPTO', gradeCm: 'HOJA', stemsPerBunch: 0, sourceDate: null } };
       if (requested.type === 'export') return { stock: null, requested, decoded: { variety: requested.variety, gradeCm: requested.gradeCm, stemsPerBunch: requested.stemsPerBunch, sourceDate: null } };
@@ -880,7 +837,6 @@ async function createRemission(input) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query("SELECT pg_advisory_xact_lock(hashtext('portal-orders'))");
     await client.query('LOCK TABLE remissions IN EXCLUSIVE MODE');
     const detailRows = [];
     const selectedInThisRemission = new Map();
@@ -904,7 +860,6 @@ async function createRemission(input) {
       const stems = requested.type === 'eucalyptus' ? requested.stems : requested.bunches * selected.stemsPerBunch;
       detailRows.push({ ...selected, gradeCm: saleGrade, sourceGradeCm: requested.type === 'eucalyptus' || requested.type === 'export' ? null : selected.gradeCm, bunches: requested.bunches, stems, unitPriceBunch: requested.type === 'eucalyptus' ? 0 : unitPriceBunch, unitPriceStem: requested.type === 'eucalyptus' ? unitPriceBunch : 0, subtotal: (requested.type === 'eucalyptus' ? stems : requested.bunches) * unitPriceBunch, isDonation: requested.isDonation });
     }
-    await protectPortalReservations(client, detailRows.filter(row => row.sourceDate).map(row => ({ variety: row.variety, gradeCm: row.sourceGradeCm, bunches: row.bunches })), portalOrderIds);
     const requestedBunches = detailRows.reduce((sum, row) => sum + row.bunches, 0);
     const requestedStems = detailRows.reduce((sum, row) => sum + row.stems, 0);
     const total = detailRows.reduce((sum, row) => sum + row.subtotal, 0);
@@ -927,27 +882,10 @@ async function createRemission(input) {
       );
       savedItems.push(saved.rows[0]);
     }
-    if (portalOrderIds.length) await linkPortalOrders(client, id, portalOrderIds, details.clientName, detailRows);
     await client.query('COMMIT');
     return mapRemission(header.rows[0], savedItems.map(mapRemissionItem));
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
-}
-
-async function listOpenPortalOrders() {
-  if (!usePostgres) return [];
-  const present = await pool.query("SELECT to_regclass('public.portal_orders') AS portal_orders");
-  if (!present.rows[0].portal_orders) return [];
-  const { rows } = await pool.query(`
-    SELECT o.id,c.name,c.id AS customer_id,COALESCE(SUM(i.bunches),0)::int AS bunches,
-      COALESCE(json_agg(json_build_object('color',i.color,'grade',i.grade,'bunches',i.bunches)) FILTER (WHERE i.id IS NOT NULL),'[]') AS items
-    FROM portal_orders o JOIN portal_customers c ON c.id=o.customer_id
-    LEFT JOIN remissions m ON m.id=o.remission_id
-    LEFT JOIN portal_order_items i ON i.order_id=o.id
-    WHERE o.status='APROBADO' AND (o.remission_id IS NULL OR m.status='ANULADA')
-    GROUP BY o.id,c.id ORDER BY o.id DESC LIMIT 100
-  `);
-  return rows.map(row => ({ id: Number(row.id), name: row.name, customerId: Number(row.customer_id), bunches: Number(row.bunches), items: row.items }));
 }
 
 async function assignRemissionItems(id, input) {
@@ -974,7 +912,6 @@ async function assignRemissionItems(id, input) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query("SELECT pg_advisory_xact_lock(hashtext('portal-orders'))");
     const header = await client.query('SELECT * FROM remissions WHERE id=$1 FOR UPDATE', [id]);
     if (!header.rows[0]) throw new Error('Remisión no encontrada.');
     if (header.rows[0].status !== 'PENDIENTE_VARIEDADES') throw new Error('Esta remisión ya no está pendiente de variedades.');
@@ -996,7 +933,6 @@ async function assignRemissionItems(id, input) {
     const expectedBunches = Number(header.rows[0].requested_bunches);
     const expectedStems = Number(header.rows[0].requested_stems);
     if (bunches > expectedBunches || stems > expectedStems) throw new Error(`La selección no puede superar ${bunchText(expectedBunches)} ni ${expectedStems} tallos.`);
-    await protectPortalReservations(client, detailRows.map(row => ({ variety: row.variety, gradeCm: row.gradeCm, bunches: row.bunches })));
     const savedItems = [];
     for (const row of detailRows) {
       const saved = await client.query(`INSERT INTO remission_items (remission_id,inventory_id,variety,source_date,grade_cm,stems_per_bunch,bunches,stems,unit_price_bunch,unit_price_stem,subtotal) VALUES ($1,NULL,$2,$3,$4,$5,$6,$7,0,0,0) RETURNING *`, [id, row.variety, row.sourceDate, row.gradeCm, row.stemsPerBunch, row.bunches, row.stems]);
@@ -1146,7 +1082,6 @@ async function createGradeTransfer(input) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query("SELECT pg_advisory_xact_lock(hashtext('portal-orders'))");
     await client.query("SELECT pg_advisory_xact_lock(hashtext('inventory-grade-transfers'))");
     let pending = bunches;
     const moved = [];
@@ -1156,7 +1091,6 @@ async function createGradeTransfer(input) {
       const available = Math.max(0, await availableLot(client, row));
       const use = Math.min(pending, available);
       if (!use) continue;
-      await protectPortalReservations(client, [{ variety: row.variety, gradeCm: fromGrade, bunches: use }]);
       const saved = await client.query('INSERT INTO inventory_grade_transfers (source_date,variety,from_grade,to_grade,stems_per_bunch,bunches,responsible,reason,batch_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *', [row.date, row.variety, fromGrade, toGrade, row.stemsPerBunch, use, responsible, reason, batchId]);
       moved.push(mapGradeTransfer(saved.rows[0])); pending -= use;
     }
@@ -1185,7 +1119,6 @@ async function createExportTransfer(input) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query("SELECT pg_advisory_xact_lock(hashtext('portal-orders'))");
     let pending = clean.bunches;
     const items = [];
     for (const row of candidates) {
@@ -1196,7 +1129,6 @@ async function createExportTransfer(input) {
       if (use) { items.push({ sourceDate: row.date, variety: row.variety, stemsPerBunch: row.stemsPerBunch, bunches: use }); pending -= use; }
     }
     if (pending) throw new Error(`No hay suficientes ramos de Bajas. Disponibles: ${clean.bunches - pending}. Actualice el inventario.`);
-    await protectPortalReservations(client, [{ variety: clean.variety, gradeCm: 'BAJAS', bunches: clean.bunches }]);
     const stems = items.reduce((sum, row) => sum + row.bunches * row.stemsPerBunch, 0);
     const header = await client.query('INSERT INTO export_transfers (variety,bunches,stems,responsible,reason) VALUES ($1,$2,$3,$4,$5) RETURNING *', [clean.variety, clean.bunches, stems, clean.responsible, clean.reason]);
     for (const item of items) await client.query('INSERT INTO export_transfer_items (transfer_id,source_date,variety,stems_per_bunch,bunches) VALUES ($1,$2,$3,$4,$5)', [header.rows[0].id, item.sourceDate, item.variety, item.stemsPerBunch, item.bunches]);
@@ -1249,7 +1181,6 @@ async function createWaste(input) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query("SELECT pg_advisory_xact_lock(hashtext('portal-orders'))");
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [key]);
     const stock = await client.query(`SELECT
       (SELECT COUNT(*)::int FROM public.scans WHERE ts::date=$1::date AND TRIM(variedad_nombre)=$2 AND UPPER(TRIM(grado_cm))=$3 AND tallos=$4) AS source_bunches,
@@ -1260,7 +1191,6 @@ async function createWaste(input) {
     [source.sourceDate, source.variety, source.gradeCm, source.stemsPerBunch]);
     const current = Number(stock.rows[0].source_bunches) - Number(stock.rows[0].used_bunches) - (source.gradeCm === 'BAJAS' ? Number(stock.rows[0].transferred_bunches) : 0) + Number(stock.rows[0].adjusted_bunches) - Number(stock.rows[0].waste_bunches);
     if (bunches > current) throw new Error(`No hay suficientes ramos para desechar. Disponibles: ${Math.max(current, 0)}.`);
-    await protectPortalReservations(client, [{ variety: source.variety, gradeCm: source.gradeCm, bunches }]);
     const result = await client.query('INSERT INTO inventory_waste (source_date,variety,grade_cm,stems_per_bunch,bunches,responsible,reason) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *', [source.sourceDate, source.variety, source.gradeCm, source.stemsPerBunch, bunches, responsible, reason]);
     await client.query('COMMIT');
     return mapWaste(result.rows[0]);
@@ -1300,7 +1230,6 @@ async function createGroupedWaste(input) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query("SELECT pg_advisory_xact_lock(hashtext('portal-orders'))");
     let pending = bunches;
     const result = [];
     for (const row of candidates) {
@@ -1309,7 +1238,6 @@ async function createGroupedWaste(input) {
       const available = Math.max(0, await availableLot(client, row));
       const used = Math.min(pending, available);
       if (!used) continue;
-      await protectPortalReservations(client, [{ variety: row.variety, gradeCm, bunches: used }]);
       const saved = await client.query('INSERT INTO inventory_waste (source_date,variety,grade_cm,stems_per_bunch,bunches,responsible,reason,batch_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *', [row.date, row.variety, gradeCm, row.stemsPerBunch, used, responsible, reason, batchId]);
       result.push(mapWaste(saved.rows[0])); pending -= used;
     }
@@ -1540,4 +1468,4 @@ async function inventoryReport(from, to) {
   return { from: start, to: end, opening, closing };
 }
 
-module.exports = { init, listInventory, listInventoryAdjustments, reconcileInventory, cancelInventoryAdjustment, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, listOpenPortalOrders, assignRemissionItems, setRemissionPrices, updateRemissionNotes, cancelRemission, renumberRemissions, listExportTransfers, createExportTransfer, cancelExportTransfer, listGradeTransfers, createGradeTransfer, listWaste, createWaste, cancelWaste, listRemissions, searchRemissions, getRemission, dashboard, salesReport, wasteReport, movementsReport, inventoryReport, usePostgres };
+module.exports = { init, listInventory, listInventoryAdjustments, reconcileInventory, cancelInventoryAdjustment, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, assignRemissionItems, setRemissionPrices, updateRemissionNotes, cancelRemission, renumberRemissions, listExportTransfers, createExportTransfer, cancelExportTransfer, listGradeTransfers, createGradeTransfer, listWaste, createWaste, cancelWaste, listRemissions, searchRemissions, getRemission, dashboard, salesReport, wasteReport, movementsReport, inventoryReport, usePostgres };

@@ -53,5 +53,13 @@ test('el botón identifica el pedido y la confirmación usa el teléfono del cli
     assert.equal(sent[2].to, '573123272558');
     assert.equal(sent[2].template.name, 'pedido_aprobado');
     assert.deepEqual(sent[2].template.components[0].parameters.map(p => p.text), ['Cliente de prueba', '17', '10.000', '2026-11-24 a las 07:00']);
+
+    await whatsapp.sendOrderNotice({ id: 19, status: 'APROBADO', name: 'Cliente de prueba', total: 10000, pickup_date: '2026-11-25', pickup_hour: 8, items: [{ color: 'ROJOS', grade: 'NACIONAL', bunches: 1 }] });
+    assert.equal(sent[3].template.name, 'aviso_anterior');
+    assert.equal(sent[3].template.components.length, 1, 'el aviso aprobado no debe llevar botones para decidir otra vez');
+
+    delete process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN;
+    delete process.env.WHATSAPP_APP_SECRET;
+    assert.ok(whatsapp.customerConfig(), 'la confirmación al cliente no necesita el webhook de botones');
   } finally { global.fetch = originalFetch; }
 });

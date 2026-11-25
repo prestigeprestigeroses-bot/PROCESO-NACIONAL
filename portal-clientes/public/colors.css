@@ -37,9 +37,3 @@
 .inventory-no-orders, .inventory-footnote { color: #53675a; font-size: 13px; }
 .inventory-no-orders { margin: 12px 0 0; }
 .inventory-footnote { margin: 16px 0 0; }
-.order-remission-link { margin-top: 14px; padding: 13px; border: 1px solid #bdd9c4; border-radius: 11px; background: #f1f8f2; }
-.order-remission-link label { margin: 0 0 8px; color: #20583c; }
-.order-remission-link>div { display: flex; gap: 8px; flex-wrap: wrap; }
-.order-remission-link input { flex: 1 1 190px; width: auto; margin: 0; }
-.order-remission-link button { flex: 0 1 auto; }
-.order-remission-linked { padding: 10px 12px; border-radius: 9px; background: #e5f4e9; color: #20583c; font-weight: 700; }

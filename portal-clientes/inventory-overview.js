@@ -3,7 +3,7 @@ function buildInventoryOverview(root, reservations, grades, assortedColor) {
   for (const row of root) {
     if (row.color === assortedColor) continue;
     for (const grade of grades) {
-      if (grade === 'EXPORTACION GRANEL' || grade === 'EUCALIPTO') continue;
+      if (grade === 'EXPORTACION GRANEL') continue;
       cells.set(`${row.color}|${grade}`, { color: row.color, grade, real: Number(row.grades[grade].bunches), pending: 0, approved: 0, orders: [] });
     }
   }

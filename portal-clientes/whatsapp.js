@@ -57,6 +57,20 @@ function approvalConfig() {
   };
 }
 
+function customerConfigurationIssues() {
+  const issues = configurationIssues();
+  const template = String(process.env.WHATSAPP_CUSTOMER_TEMPLATE_NAME || '').trim();
+  if (!template) issues.push('WHATSAPP_CUSTOMER_TEMPLATE_NAME: falta configurar');
+  else if (!/^[a-z0-9_]+$/.test(template)) issues.push('WHATSAPP_CUSTOMER_TEMPLATE_NAME: usa minúsculas, números y guiones bajos');
+  return issues;
+}
+
+function customerConfig() {
+  const base = config();
+  if (!base || customerConfigurationIssues().length) return null;
+  return { ...base, customerTemplate: String(process.env.WHATSAPP_CUSTOMER_TEMPLATE_NAME).trim() };
+}
+
 function decisionPayload(orderId, decision, appSecret) {
   const id = String(orderId);
   const action = decision === 'RECHAZADO' ? 'rechazar' : 'aprobar';
@@ -119,15 +133,14 @@ async function sendOrderNotice(order) {
     const colors = groups.get(item.grade);
     colors.set(item.color, (colors.get(item.color) || 0) + Number(item.bunches));
   }
-  const gradeOrder = ['BAJAS', 'NACIONAL', 'BAJAS GRANEL', 'NACIONAL GRANEL', 'EUCALIPTO', 'EXPORTACION GRANEL'];
+  const gradeOrder = ['BAJAS', 'NACIONAL', 'BAJAS GRANEL', 'NACIONAL GRANEL', 'EXPORTACION GRANEL'];
   let truncated = false;
   for (const grade of [...groups.keys()].sort((a, b) => gradeOrder.indexOf(a) - gradeOrder.indexOf(b))) {
     const heading = `\n\n*${grade}*`;
     let addedHeading = false;
     for (const [color, bunches] of groups.get(grade)) {
       const label = color.charAt(0) + color.slice(1).toLocaleLowerCase('es-CO');
-      const unit = grade === 'EUCALIPTO' ? (bunches === 1 ? 'tallo' : 'tallos') : (bunches === 1 ? 'ramo' : 'ramos');
-      const line = `\n• ${label}: ${bunches} ${unit}`;
+      const line = `\n• ${label}: ${bunches} ${bunches === 1 ? 'ramo' : 'ramos'}`;
       const next = `${addedHeading ? '' : heading}${line}`;
       if (detail.length + next.length > 610) { truncated = true; break; }
       detail += next;
@@ -136,7 +149,7 @@ async function sendOrderNotice(order) {
     if (truncated) break;
   }
   if (truncated) detail += '\n• Ver el resto del pedido en el enlace';
-  const approval = approvalConfig();
+  const approval = order.status === 'APROBADO' ? null : approvalConfig();
   const buttons = approval ? [{ type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: decisionPayload(order.id, 'APROBADO', approval.appSecret) }] }] : [];
   if (approval?.decisionTemplate) buttons.push({ type: 'button', sub_type: 'quick_reply', index: '1', parameters: [{ type: 'payload', payload: decisionPayload(order.id, 'RECHAZADO', approval.appSecret) }] });
   return sendTemplate(settings, adminPhone, approval?.decisionTemplate || approval?.approvalTemplate || settings.template, [
@@ -146,7 +159,7 @@ async function sendOrderNotice(order) {
 }
 
 async function sendCustomerApproval(order) {
-  const settings = approvalConfig();
+  const settings = customerConfig();
   if (!settings) throw new Error('La confirmación automática de WhatsApp no está configurada.');
   const pickup = order.pickup_date ? `${String(order.pickup_date).slice(0, 10)} a las ${String(order.pickup_hour).padStart(2, '0')}:00` : 'Por coordinar';
   return sendTemplate(settings, customerPhone(order.phone), settings.customerTemplate, [
@@ -168,4 +181,4 @@ async function sendText(to, text) {
   return result.messages[0].id;
 }
 
-module.exports = { adminPhone, config, approvalConfig, approvalConfigurationIssues, approvedPayloadOrderId, payloadDecision, configurationIssues, sendOrderNotice, sendCustomerApproval, sendText };
+module.exports = { adminPhone, config, customerConfig, customerConfigurationIssues, approvalConfig, approvalConfigurationIssues, approvedPayloadOrderId, payloadDecision, configurationIssues, sendOrderNotice, sendCustomerApproval, sendText };
