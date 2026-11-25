@@ -179,7 +179,8 @@ async function processCustomerWhatsAppQueue() {
       try {
         const { rows } = await pool.query("SELECT o.id,o.total,to_char(o.pickup_date,'YYYY-MM-DD') AS pickup_date,o.pickup_hour,c.name,c.phone FROM portal_orders o JOIN portal_customers c ON c.id=o.customer_id WHERE o.id=$1 AND o.status='APROBADO'", [job.order_id]);
         if (!rows[0]) { await pool.query("UPDATE portal_customer_notifications SET status='CANCELADO',updated_at=NOW() WHERE order_id=$1", [job.order_id]); continue; }
-        const messageId = await whatsapp.sendCustomerApproval(rows[0]);
+        const { rows: items } = await pool.query('SELECT color,grade,bunches FROM portal_order_items WHERE order_id=$1 ORDER BY id', [job.order_id]);
+        const messageId = await whatsapp.sendCustomerApproval({ ...rows[0], items });
         await pool.query("UPDATE portal_customer_notifications SET status='SOLICITADO',message_id=$2,last_error='',updated_at=NOW() WHERE order_id=$1", [job.order_id, messageId]);
       } catch (error) {
         await pool.query("UPDATE portal_customer_notifications SET status='ERROR',last_error=$2,updated_at=NOW() WHERE order_id=$1", [job.order_id, String(error.message || error).slice(0, 300)]);

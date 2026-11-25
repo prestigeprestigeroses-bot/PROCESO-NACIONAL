@@ -20,13 +20,13 @@ Cada pedido nuevo pide día y hora de recogida (hora completa, sin minutos). Las
 
 Cuando el portal tiene configurada la **WhatsApp Business Platform**, al registrar un pedido solicita automáticamente a Meta un aviso a **+57 300 254 3548** (o `WHATSAPP_ADMIN_PHONE`) y una confirmación al teléfono del cliente. El aviso al administrador incluye número de pedido, cliente, productos, total y enlace al portal. Para los pedidos nuevos usa la plantilla sin botones `WHATSAPP_TEMPLATE_NAME`, porque ya están aprobados. El envío se reintenta si Meta lo rechaza; la aceptación por Meta no garantiza entrega al teléfono.
 
-Para activar los avisos automáticos, configure `PORTAL_PUBLIC_URL` (HTTPS), `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_GRAPH_VERSION`, `WHATSAPP_TEMPLATE_NAME`, `WHATSAPP_TEMPLATE_LANGUAGE` y opcionalmente `WHATSAPP_ADMIN_PHONE` en el entorno del portal. El número remitente debe estar conectado a Meta Cloud API y la plantilla de utilidad aprobada debe tener cinco parámetros de cuerpo, en este orden: **número de pedido, nombre del cliente, detalle de colores/grados/ramos, total COP, enlace al pedido**. Texto sugerido: `Nuevo pedido #{{1}} de {{2}}. Productos: {{3}}. Total estimado COP {{4}}. Ver pedido: {{5}}`. El nombre e idioma deben coincidir exactamente con los de la plantilla aprobada. Guarde el token solo en variables de entorno, nunca en Git.
+Para activar los avisos automáticos, configure `PORTAL_PUBLIC_URL` (HTTPS), `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_GRAPH_VERSION`, `WHATSAPP_TEMPLATE_NAME`, `WHATSAPP_TEMPLATE_LANGUAGE` y opcionalmente `WHATSAPP_ADMIN_PHONE` en el entorno del portal. El número remitente debe estar conectado a Meta Cloud API y la plantilla de utilidad aprobada debe tener cinco parámetros de cuerpo, en este orden: **número de pedido, nombre del cliente, recogida y productos agrupados por grado completo, total COP, enlace al pedido**. El nombre e idioma deben coincidir exactamente con los de la plantilla aprobada. Guarde el token solo en variables de entorno, nunca en Git.
 
 Cada pedido nuevo queda en la cola `portal_whatsapp_notifications`. Si Meta rechaza el envío, el portal lo reintenta y muestra el estado en el panel. `SOLICITADO` significa que Meta aceptó la solicitud; no confirma entrega al teléfono. Si la integración no está configurada, el portal deshabilita los pedidos nuevos y muestra un aviso. El cliente no necesita abrir WhatsApp para enviar el pedido.
 
 ## Confirmación automática y pedidos anteriores
 
-Configure `WHATSAPP_CUSTOMER_TEMPLATE_NAME` con el nombre exacto de la plantilla aprobada para el cliente. Debe tener cuatro parámetros: nombre, número de pedido, total COP y fecha/hora de recogida. Sin esta plantilla y las variables básicas de WhatsApp no se permiten pedidos nuevos, para evitar aprobarlos sin solicitar su confirmación. Los pedidos que ya estaban pendientes antes de esta actualización pueden seguir aprobándose o rechazándose desde administración o mediante los botones antiguos del webhook. Un pedido aprobado puede cancelarse desde administración para liberar su reserva del portal.
+Configure `WHATSAPP_CUSTOMER_TEMPLATE_NAME` con el nombre exacto de la plantilla aprobada para el cliente. Debe tener **cinco** parámetros: nombre, número de pedido, fecha/hora de recogida, productos agrupados por grado completo y total COP. La plantilla anterior de cuatro variables ya no coincide con este envío; cree o apruebe una nueva antes de desplegar esta versión. Sin esta plantilla y las variables básicas de WhatsApp no se permiten pedidos nuevos, para evitar aprobarlos sin solicitar su confirmación. Los pedidos que ya estaban pendientes antes de esta actualización pueden seguir aprobándose o rechazándose desde administración o mediante los botones antiguos del webhook. Un pedido aprobado puede cancelarse desde administración para liberar su reserva del portal.
 
 Los pedidos nuevos usan `WHATSAPP_TEMPLATE_NAME` para el aviso al administrador. Esa plantilla debe tener cinco variables de cuerpo y **no pedir aprobación ni rechazo**. Las siguientes variables solo se necesitan para procesar botones de avisos antiguos de pedidos que todavía estén pendientes:
 
@@ -55,8 +55,12 @@ Texto sugerido para la plantilla al cliente (cuatro variables en el cuerpo):
 ```text
 Hola {{1}}, tu pedido #{{2}} de Prestige Roses fue aprobado.
 
-*Total a pagar:* COP {{3}}
-*Recogida:* {{4}}
+*Recogida:* {{3}}
+
+*Productos solicitados:*
+{{4}}
+
+*Total a pagar:* COP {{5}}
 
 Gracias por tu pedido.
 ```
