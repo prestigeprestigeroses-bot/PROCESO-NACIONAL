@@ -38,7 +38,7 @@ test('el botón identifica el pedido y la confirmación usa el teléfono del cli
     ] });
     assert.equal(sent[1].template.name, 'pedido_con_dos_botones');
     assert.equal(sent[1].template.components[0].parameters[1].text, '*Cliente de prueba*');
-    assert.equal(sent[1].template.components[0].parameters[2].text, '*Recogida:* 25/11/2026 a las 8:00\n\n*BAJAS BONCHADAS*\n• Rojos: 20 ramos\n• Blancos: 12 ramos\n• Rosados claros: 30 ramos\n\n*NACIONAL BONCHADO*\n• Blancos: 11 ramos');
+    assert.equal(sent[1].template.components[0].parameters[2].text, '*Recogida:* 25/11/2026 a las 8:00 | *BAJAS BONCHADAS*: Rojos: 20 ramos; Blancos: 12 ramos; Rosados claros: 30 ramos | *NACIONAL BONCHADO*: Blancos: 11 ramos');
     const buttons = sent[1].template.components.slice(1);
     assert.deepEqual(buttons.map(button => button.index), ['0', '1']);
     const approve = buttons[0].parameters[0].payload;
@@ -60,8 +60,11 @@ test('el botón identifica el pedido y la confirmación usa el teléfono del cli
     assert.equal(sent[2].template.name, 'pedido_aprobado');
     assert.deepEqual(sent[2].template.components[0].parameters.map(p => p.text), [
       'Cliente de prueba', '17', '2026-11-24 a las 07:00',
-      '*BAJAS BONCHADAS*\n• Rojos: 2 ramos\n\n*NACIONAL BONCHADO*\n• Peach: 1 ramo\n\n*BAJAS GRANEL*\n• Blancos: 3 ramos\n\n*NACIONAL GRANEL*\n• Amarillos: 4 ramos\n\n*EXPORTACIÓN GRANEL*\n• Naranjas: 5 ramos', '10.000'
+      '*BAJAS BONCHADAS*: Rojos: 2 ramos | *NACIONAL BONCHADO*: Peach: 1 ramo | *BAJAS GRANEL*: Blancos: 3 ramos | *NACIONAL GRANEL*: Amarillos: 4 ramos | *EXPORTACIÓN GRANEL*: Naranjas: 5 ramos', '10.000'
     ]);
+    for (const message of sent) for (const parameter of message.template.components[0].parameters) {
+      assert.doesNotMatch(parameter.text, /[\r\n\t]| {5}/, 'Meta no acepta saltos de línea ni más de cuatro espacios en variables');
+    }
 
     await whatsapp.sendOrderNotice({ id: 19, status: 'APROBADO', name: 'Cliente de prueba', total: 10000, pickup_date: '2026-11-25', pickup_hour: 8, items: [{ color: 'ROJOS', grade: 'NACIONAL', bunches: 1 }] });
     assert.equal(sent[3].template.name, 'aviso_anterior');

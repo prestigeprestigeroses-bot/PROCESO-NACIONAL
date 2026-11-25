@@ -102,7 +102,7 @@ async function sendTemplate(settings, to, name, parameters, buttons = []) {
     messaging_product: 'whatsapp', to, type: 'template',
     template: {
       name, language: { code: settings.language },
-      components: [{ type: 'body', parameters: parameters.map(value => ({ type: 'text', text: String(value) })) }, ...buttons]
+      components: [{ type: 'body', parameters: parameters.map(value => ({ type: 'text', text: String(value).replace(/\s+/g, ' ').trim() })) }, ...buttons]
     }
   };
   const response = await fetch(`https://graph.facebook.com/${settings.version}/${settings.phoneId}/messages`, {
@@ -125,7 +125,7 @@ async function sendOrderNotice(order) {
   const reviewUrl = `${settings.publicUrl}/?pedido=${order.id}`;
   const pickup = order.pickup_date ? String(order.pickup_date).slice(0, 10).split('-') : null;
   const pickupDetail = pickup?.length === 3 ? `*Recogida:* ${pickup[2]}/${pickup[1]}/${pickup[0]} a las ${Number(order.pickup_hour)}:00` : '*Recogida:* Por coordinar';
-  const detail = `${pickupDetail}\n\n${formatOrderItems(order.items)}`;
+  const detail = `${pickupDetail} | ${formatOrderItems(order.items)}`;
   const approval = order.status === 'APROBADO' ? null : approvalConfig();
   const buttons = approval ? [{ type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: decisionPayload(order.id, 'APROBADO', approval.appSecret) }] }] : [];
   if (approval?.decisionTemplate) buttons.push({ type: 'button', sub_type: 'quick_reply', index: '1', parameters: [{ type: 'payload', payload: decisionPayload(order.id, 'RECHAZADO', approval.appSecret) }] });
@@ -148,10 +148,10 @@ function formatOrderItems(items) {
   return [...groups.keys()].sort((a, b) => gradeOrder.indexOf(a) - gradeOrder.indexOf(b)).map(grade => {
     const lines = [...groups.get(grade)].map(([color, bunches]) => {
       const label = color.charAt(0) + color.slice(1).toLocaleLowerCase('es-CO');
-      return `• ${label}: ${bunches} ${bunches === 1 ? 'ramo' : 'ramos'}`;
+      return `${label}: ${bunches} ${bunches === 1 ? 'ramo' : 'ramos'}`;
     });
-    return `*${gradeNames[grade] || grade}*\n${lines.join('\n')}`;
-  }).join('\n\n');
+    return `*${gradeNames[grade] || grade}*: ${lines.join('; ')}`;
+  }).join(' | ');
 }
 
 async function sendCustomerApproval(order) {
