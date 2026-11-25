@@ -119,14 +119,15 @@ async function sendOrderNotice(order) {
     const colors = groups.get(item.grade);
     colors.set(item.color, (colors.get(item.color) || 0) + Number(item.bunches));
   }
-  const gradeOrder = ['BAJAS', 'NACIONAL', 'BAJAS GRANEL', 'NACIONAL GRANEL', 'EXPORTACION GRANEL'];
+  const gradeOrder = ['BAJAS', 'NACIONAL', 'BAJAS GRANEL', 'NACIONAL GRANEL', 'EUCALIPTO', 'EXPORTACION GRANEL'];
   let truncated = false;
   for (const grade of [...groups.keys()].sort((a, b) => gradeOrder.indexOf(a) - gradeOrder.indexOf(b))) {
     const heading = `\n\n*${grade}*`;
     let addedHeading = false;
     for (const [color, bunches] of groups.get(grade)) {
       const label = color.charAt(0) + color.slice(1).toLocaleLowerCase('es-CO');
-      const line = `\n• ${label}: ${bunches} ${bunches === 1 ? 'ramo' : 'ramos'}`;
+      const unit = grade === 'EUCALIPTO' ? (bunches === 1 ? 'tallo' : 'tallos') : (bunches === 1 ? 'ramo' : 'ramos');
+      const line = `\n• ${label}: ${bunches} ${unit}`;
       const next = `${addedHeading ? '' : heading}${line}`;
       if (detail.length + next.length > 610) { truncated = true; break; }
       detail += next;

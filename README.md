@@ -10,6 +10,8 @@ Aplicación web para controlar salidas nacionales de flor. Consulta existencias 
 - Número de ramos calculado con `COUNT(*)` y total de tallos con `SUM(tallos)`.
 - Selectores de fecha y grado sincronizados entre Resumen e Inventario.
 - Creación completa en un solo paso con cliente, variedades, grados, precios y observaciones.
+- Vinculación opcional de uno o varios pedidos aprobados del portal al crear la remisión. Solo se aceptan pedidos del mismo cliente cuyas cantidades por color y grado estén cubiertas por la salida.
+- Las salidas de flor (remisiones, traslados, desechos y ajustes que restan ramos) respetan las reservas activas del portal. Una remisión vinculada puede usar los ramos de sus propios pedidos; las demás reservas quedan protegidas. El eucalipto se solicita en el portal por tallos y no usa el inventario de rosas.
 - Lista de precios independiente por variedad y grado, con precios generales o especiales por cliente.
 - Validación de existencias, generación del documento y descuento de inventario en una sola transacción.
 - Toda la flor queda disponible inmediatamente, incluida la recibida el mismo día.

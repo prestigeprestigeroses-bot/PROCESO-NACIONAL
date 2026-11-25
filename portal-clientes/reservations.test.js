@@ -31,6 +31,11 @@ test('exportación granel mantiene cantidad libre sin reserva', () => {
   ], ['BLANCOS', 'AMARILLOS']), []);
 });
 
+test('eucalipto se pide por tallos sin reservar rosas', () => {
+  const catalog = [{ color: 'EUCALIPTO', grades: { EUCALIPTO: { bunches: 0, stems: 0 } } }];
+  assert.deepEqual(allocateReservations(catalog, [{ color: 'EUCALIPTO', grade: 'EUCALIPTO', bunches: 50 }], []), []);
+});
+
 test('el pedido reduce solo la vista del portal y cancelarlo restaura la existencia real', () => {
   const real = [
     { color: 'ROJOS', grades: { NACIONAL: { bunches: 10, stems: 250 } } },

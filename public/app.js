@@ -1,5 +1,5 @@
 const varieties = ['FREEDOM', 'PINK FLOYD', 'MONDIAL', 'HUMMER', 'MOMENTUM', 'CORAL REEF', 'QUICK SAND', 'HILUX', 'CANDLELIGHT', 'DEEP PURPLE', 'SUMMERSAND', 'STAR PLATINUM', 'SHIMMER', 'PINK OHARA', 'WHITE OHARA', 'PINK MONDIAL', 'BLESSING', 'PINK AMARETO', 'TIFFANY', 'YELLOW BIKINI', 'QUEEN BERRY', 'MOODY BLUE', 'SWAN', 'HIGH MAGIC', 'EXPLORER', 'DANCING RED', 'VENDELA'];
-const state = { inventory: [], inventoryFingerprint: '', inventoryRefreshPromise: null, inventoryLastSyncedAt: null, inventorySyncError: '', refreshVersion: 0, reconciliationSources: [], adjustments: [], remissions: [], historyRows: [], historyHasMore: false, historyVersion: 0, historyLoading: false, prices: [], transfers: [], gradeTransfers: [], waste: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), selectedPriceGrades: new Map(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], wasteReport: [], movementsReport: { adjustments: [], transfers: [], gradeTransfers: [] }, inventoryReport: null, reportRange: '', stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
+const state = { inventory: [], inventoryFingerprint: '', inventoryRefreshPromise: null, inventoryLastSyncedAt: null, inventorySyncError: '', refreshVersion: 0, reconciliationSources: [], adjustments: [], remissions: [], portalOrders: [], historyRows: [], historyHasMore: false, historyVersion: 0, historyLoading: false, prices: [], transfers: [], gradeTransfers: [], waste: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), selectedPriceGrades: new Map(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], wasteReport: [], movementsReport: { adjustments: [], transfers: [], gradeTransfers: [] }, inventoryReport: null, reportRange: '', stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const money = value => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', currencyDisplay: 'code', maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -426,7 +426,7 @@ function switchView(view) {
   $('#sidebar').classList.remove('open');
   window.scrollTo({ top: 0, behavior: 'smooth' });
   if (view === 'history') loadFullHistory();
-  if (view === 'new-remission') refreshRemissionInventory();
+  if (view === 'new-remission') { refreshRemissionInventory(); loadPortalOrders(); }
 }
 
 function reportGroups(rows) {
@@ -586,6 +586,26 @@ function toast(message) {
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => element.classList.remove('show'), 3200);
 }
+
+async function loadPortalOrders() {
+  try {
+    state.portalOrders = await api('/api/portal-orders/approved', { cache: 'no-store' });
+    $('#portal-order-options').innerHTML = state.portalOrders.length ? state.portalOrders.map(order => `<label class="portal-order-choice"><input type="checkbox" name="portalOrderIds" value="${order.id}" data-customer-id="${order.customerId}"><span><strong>Pedido #${order.id} · ${escapeHtml(order.name)}</strong><small>${order.bunches} ramos · ${order.items.map(item => `${escapeHtml(item.color)} / ${escapeHtml(item.grade)}: ${item.bunches}`).join(' · ')}</small></span></label>`).join('') : '<p>No hay pedidos aprobados pendientes de remisión.</p>';
+  } catch (error) { $('#portal-order-options').textContent = `No se pudieron cargar los pedidos: ${error.message}`; }
+}
+
+$('#portal-order-options').addEventListener('change', event => {
+  const checkbox = event.target.closest('input[name="portalOrderIds"]');
+  if (!checkbox || !checkbox.checked) return;
+  const selected = [...$('#portal-order-options').querySelectorAll('input[name="portalOrderIds"]:checked')];
+  if (selected.some(input => input.dataset.customerId !== checkbox.dataset.customerId)) { checkbox.checked = false; toast('Selecciona pedidos del mismo cliente.'); return; }
+  const order = state.portalOrders.find(row => String(row.id) === checkbox.value);
+  if (order && $('#remission-client-name').value !== order.name) {
+    $('#remission-client-name').value = order.name;
+    $('#remission-client-name').dispatchEvent(new Event('input', { bubbles: true }));
+    $('#remission-client-name').dispatchEvent(new Event('change', { bubbles: true }));
+  }
+});
 
 function clearRemission() {
   $('#remission-form').reset();
@@ -982,12 +1002,13 @@ $('#remission-form').addEventListener('submit', async event => {
   const button = event.submitter;
   $('#remission-error').textContent = '';
   if (!state.lines.length) return $('#remission-error').textContent = 'Agregue al menos una variedad.';
-  const payload = { ...Object.fromEntries(new FormData(event.currentTarget)), items: state.lines.map(line => line.type === 'eucalyptus' ? { type: 'eucalyptus', stems: line.stems, isDonation: line.isDonation } : line.type === 'export' ? { type: 'export', variety: line.variety, gradeCm: line.gradeCm, stemsPerBunch: line.stemsPerBunch, bunches: line.bunches, isDonation: line.isDonation } : { key: line.sourceKey || line.key, bunches: line.bunches, isDonation: line.isDonation }) };
+  const payload = { ...Object.fromEntries(new FormData(event.currentTarget)), portalOrderIds: [...event.currentTarget.querySelectorAll('input[name="portalOrderIds"]:checked')].map(input => Number(input.value)), items: state.lines.map(line => line.type === 'eucalyptus' ? { type: 'eucalyptus', stems: line.stems, isDonation: line.isDonation } : line.type === 'export' ? { type: 'export', variety: line.variety, gradeCm: line.gradeCm, stemsPerBunch: line.stemsPerBunch, bunches: line.bunches, isDonation: line.isDonation } : { key: line.sourceKey || line.key, bunches: line.bunches, isDonation: line.isDonation }) };
   button.disabled = true;
   try {
     const remission = await api('/api/remissions', { method: 'POST', body: JSON.stringify(payload) });
     renderDocument(remission);
     clearRemission();
+    void loadPortalOrders();
     $('#remission-dialog').showModal();
     try {
       await refreshAll();
