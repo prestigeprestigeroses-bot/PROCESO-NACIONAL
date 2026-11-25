@@ -54,13 +54,14 @@ test('el botón identifica el pedido y la confirmación usa el teléfono del cli
       { color: 'BLANCOS', grade: 'BAJAS GRANEL', bunches: 3 },
       { color: 'PEACH', grade: 'NACIONAL', bunches: 1 },
       { color: 'AMARILLOS', grade: 'NACIONAL GRANEL', bunches: 4 },
-      { color: 'NARANJAS', grade: 'EXPORTACION GRANEL', bunches: 5 }
+      { color: 'NARANJAS', grade: 'EXPORTACION GRANEL', bunches: 5 },
+      { color: 'EUCALIPTO', grade: 'EUCALIPTO', bunches: 6 }
     ] });
     assert.equal(sent[2].to, '573123272558');
     assert.equal(sent[2].template.name, 'pedido_aprobado');
     assert.deepEqual(sent[2].template.components[0].parameters.map(p => p.text), [
       'Cliente de prueba', '17', '2026-11-24 a las 07:00',
-      '*BAJAS BONCHADAS*: Rojos: 2 ramos | *NACIONAL BONCHADO*: Peach: 1 ramo | *BAJAS GRANEL*: Blancos: 3 ramos | *NACIONAL GRANEL*: Amarillos: 4 ramos | *EXPORTACIÓN GRANEL*: Naranjas: 5 ramos', '10.000'
+      '*BAJAS BONCHADAS*: Rojos: 2 ramos | *NACIONAL BONCHADO*: Peach: 1 ramo | *BAJAS GRANEL*: Blancos: 3 ramos | *NACIONAL GRANEL*: Amarillos: 4 ramos | *EUCALIPTO*: Eucalipto: 6 tallos | *EXPORTACIÓN GRANEL*: Naranjas: 5 ramos', '10.000'
     ]);
     for (const message of sent) for (const parameter of message.template.components[0].parameters) {
       assert.doesNotMatch(parameter.text, /[\r\n\t]| {5}/, 'Meta no acepta saltos de línea ni más de cuatro espacios en variables');

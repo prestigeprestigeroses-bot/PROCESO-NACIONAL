@@ -3,10 +3,11 @@ const assert = require('node:assert/strict');
 const { buildInventoryOverview } = require('./inventory-overview');
 
 test('muestra inventario real, reservas por pedido y faltante sin duplicar colores surtidos', () => {
-  const grades = ['NACIONAL', 'BAJAS', 'EXPORTACION GRANEL'];
+  const grades = ['NACIONAL', 'BAJAS', 'EUCALIPTO'];
   const root = [
-    { color: 'ROJOS', grades: { NACIONAL: { bunches: 29 }, BAJAS: { bunches: 0 }, 'EXPORTACION GRANEL': { bunches: 0 } } },
-    { color: 'COLORES SURTIDOS', grades: { NACIONAL: { bunches: 29 }, BAJAS: { bunches: 0 }, 'EXPORTACION GRANEL': { bunches: 0 } } }
+    { color: 'ROJOS', grades: { NACIONAL: { bunches: 29 }, BAJAS: { bunches: 0 }, EUCALIPTO: { bunches: 0 } } },
+    { color: 'COLORES SURTIDOS', grades: { NACIONAL: { bunches: 29 }, BAJAS: { bunches: 0 }, EUCALIPTO: { bunches: 0 } } },
+    { color: 'EUCALIPTO', grades: { NACIONAL: { bunches: 0 }, BAJAS: { bunches: 0 }, EUCALIPTO: { bunches: 0 } } }
   ];
   const reservations = [
     { order_id: 30, name: 'Cliente A', status: 'APROBADO', color: 'ROJOS', grade: 'NACIONAL', bunches: 1 },

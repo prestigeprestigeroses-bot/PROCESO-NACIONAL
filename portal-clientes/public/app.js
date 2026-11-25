@@ -1,9 +1,10 @@
 const $ = id => document.getElementById(id);
 const format = n => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(Number(n || 0));
-const gradeNames = { NACIONAL: 'Nacional bonchado', BAJAS: 'Bajas bonchadas', 'NACIONAL GRANEL': 'Nacional granel', 'BAJAS GRANEL': 'Bajas granel', 'EXPORTACION GRANEL': 'Exportación granel' };
-const gradeOrder = Object.keys(gradeNames);
-const swatches = { ROJOS:'#bb2137',BLANCOS:'#ece9e2','ROSADOS CLAROS':'#f5b4ca','ROSADOS MEDIOS':'#e77aa4','ROSADOS FUERTES':'#ca4178',AMARILLOS:'#efc84d',MORADOS:'#80619b',NARANJAS:'#e88745',PEACH:'#f3a98e',ARENA:'#c4ac88','COLORES SURTIDOS':'linear-gradient(135deg,#d74453,#f2cf55,#83bb9c,#9d7ac3)' };
-const colorTints = { ROJOS:'#ffe5e8',BLANCOS:'#f0efeb','ROSADOS CLAROS':'#ffe8f0','ROSADOS MEDIOS':'#ffd9e8','ROSADOS FUERTES':'#ffd2e4',AMARILLOS:'#fff0b5',MORADOS:'#eee1fa',NARANJAS:'#ffe2cb',PEACH:'#ffe8d9',ARENA:'#eee2d1','COLORES SURTIDOS':'#e8ebfa' };
+const gradeNames = { NACIONAL: 'Nacional bonchado', BAJAS: 'Bajas bonchadas', 'NACIONAL GRANEL': 'Nacional granel', 'BAJAS GRANEL': 'Bajas granel', EUCALIPTO: 'Eucalipto', 'EXPORTACION GRANEL': 'Exportación granel' };
+const gradeOrder = ['NACIONAL', 'BAJAS', 'NACIONAL GRANEL', 'BAJAS GRANEL', 'EUCALIPTO'];
+const unit = (grade, quantity) => grade === 'EUCALIPTO' ? `${quantity} ${quantity === 1 ? 'tallo' : 'tallos'}` : `${quantity} ${quantity === 1 ? 'ramo' : 'ramos'}`;
+const swatches = { ROJOS:'#bb2137',BLANCOS:'#ece9e2','ROSADOS CLAROS':'#f5b4ca','ROSADOS MEDIOS':'#e77aa4','ROSADOS FUERTES':'#ca4178',AMARILLOS:'#efc84d',MORADOS:'#80619b',NARANJAS:'#e88745',PEACH:'#f3a98e',ARENA:'#c4ac88',EUCALIPTO:'#3d8a60','COLORES SURTIDOS':'linear-gradient(135deg,#d74453,#f2cf55,#83bb9c,#9d7ac3)' };
+const colorTints = { ROJOS:'#ffe5e8',BLANCOS:'#f0efeb','ROSADOS CLAROS':'#ffe8f0','ROSADOS MEDIOS':'#ffd9e8','ROSADOS FUERTES':'#ffd2e4',AMARILLOS:'#fff0b5',MORADOS:'#eee1fa',NARANJAS:'#ffe2cb',PEACH:'#ffe8d9',ARENA:'#eee2d1',EUCALIPTO:'#e1f3e6','COLORES SURTIDOS':'#e8ebfa' };
 const rainbow = 'linear-gradient(135deg,#e74f59,#f3b64c,#e9db56,#74c993,#70b4e4,#a68bd1)';
 const pickupHourSelect = document.getElementById('pickup-hour');
 function updatePickupHours() {
@@ -20,28 +21,74 @@ function updatePickupHours() {
 updatePickupHours();
 $('pickup-date').addEventListener('change', updatePickupHours);
 $('pickup-date').addEventListener('click', event => { try { event.currentTarget.showPicker?.(); } catch { event.currentTarget.focus(); } });
-let role = null, catalog = [], prices = {}, cart = new Map(), lastOrderId = null, automaticWhatsApp = false, adminCustomers = [], adminInventory = [];
-async function api(url, options = {}) { const res = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', ...options.headers } }); const body = await res.json(); if (!res.ok) throw new Error(body.error || 'No se pudo completar la solicitud.'); return body; }
+let role = null, catalog = [], prices = {}, cart = new Map(), lastOrderId = null, automaticWhatsApp = false, adminCustomers = [], adminInventory = [], catalogEvents = null, ordering = false;
+async function api(url, options = {}) { const res = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', ...options.headers } }); const body = await res.json(); if (!res.ok) { const error = new Error(body.error || 'No se pudo completar la solicitud.'); error.status = res.status; throw error; } return body; }
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 function show(id) { for (const name of ['login','customer','admin']) $(name).classList.toggle('hidden', name !== id); $('logout').classList.toggle('hidden', id === 'login'); $('cart-bar').classList.toggle('hidden', id !== 'customer' || cart.size === 0); }
 function toast(message) { $('toast').textContent = message; $('toast').classList.remove('hidden'); setTimeout(() => $('toast').classList.add('hidden'), 4200); }
 function cartKey(color, grade) { return `${color}|${grade}`; }
+function cartIssue() {
+  const byColor = new Map(catalog.map(row => [row.color, row]));
+  for (const [key, quantity] of cart) {
+    const [color, grade] = key.split('|');
+    if (color === 'EUCALIPTO' && grade === 'EUCALIPTO') continue;
+    const available = byColor.get(color)?.grades[grade]?.bunches || 0;
+    if (quantity > available) return `${gradeNames[grade] || grade} de ${color}: quedan ${available} ramos. Ajusta el pedido según el inventario actualizado.`;
+  }
+  for (const grade of gradeOrder.filter(value => value !== 'EUCALIPTO')) {
+    const stock = catalog.filter(row => !['ROJOS', 'COLORES SURTIDOS', 'EUCALIPTO'].includes(row.color))
+      .reduce((sum, row) => sum + (row.grades[grade]?.bunches || 0), 0);
+    const selected = [...cart].filter(([key]) => {
+      const [color, itemGrade] = key.split('|');
+      return itemGrade === grade && !['ROJOS', 'EUCALIPTO'].includes(color);
+    }).reduce((sum, [, quantity]) => sum + quantity, 0);
+    if (selected > stock) return `${gradeNames[grade]}: los colores surtidos y los colores individuales comparten ${stock} ramos. Reduce el pedido para continuar.`;
+  }
+  return '';
+}
+function syncOrderState(updateError = true) {
+  const issue = cartIssue();
+  $('submit-order').disabled = ordering || !automaticWhatsApp || !cart.size || Boolean(issue);
+  if (updateError && $('review-dialog').open) $('order-error').textContent = issue;
+  return issue;
+}
 function renderCatalog() {
   const previousScroll = $('catalog').querySelector('.order-matrix-scroll')?.scrollLeft || 0;
   const available = catalog;
   if (!available.length) { $('catalog').innerHTML = '<p class="catalog-hint">No hay flor disponible por ahora.</p>'; renderCart(); return; }
-  $('catalog').innerHTML = `<div class="order-matrix-scroll"><table class="order-matrix"><thead><tr><th scope="col">Color</th>${gradeOrder.map(grade => `<th scope="col"><span>${esc(gradeNames[grade])}</span><small>${format(prices[grade])} / ramo</small></th>`).join('')}</tr></thead><tbody>${available.map(row => `<tr><th scope="row"><span class="matrix-color"><span class="swatch" style="background:${row.color === 'COLORES SURTIDOS' ? rainbow : (swatches[row.color] || '#ddd')}"></span>${esc(row.color)}</span></th>${gradeOrder.map(grade => { const stock = row.grades[grade]?.bunches || 0, qty = cart.get(cartKey(row.color,grade)) || 0; return `<td>${stock || grade === 'EXPORTACION GRANEL' ? `<div class="matrix-cell ${grade === 'EXPORTACION GRANEL' ? 'matrix-cell--free' : ''} ${qty ? 'matrix-cell--selected' : ''}"><button data-action="minus" data-color="${esc(row.color)}" data-grade="${esc(grade)}" ${qty ? '' : 'disabled'} aria-label="Quitar ${esc(gradeNames[grade])} de ${esc(row.color)}">−</button><input data-color="${esc(row.color)}" data-grade="${esc(grade)}" type="number" inputmode="numeric" min="0" max="${grade === 'EXPORTACION GRANEL' ? 10000 : stock}" value="${qty}" aria-label="Ramos de ${esc(row.color)}, ${esc(gradeNames[grade])}"><button data-action="plus" data-color="${esc(row.color)}" data-grade="${esc(grade)}" ${qty >= (grade === 'EXPORTACION GRANEL' ? 10000 : stock) ? 'disabled' : ''} aria-label="Agregar ${esc(gradeNames[grade])} de ${esc(row.color)}">+</button><small>${grade === 'EXPORTACION GRANEL' ? 'Cantidad libre' : `● ${stock} disponibles`}</small></div>` : '<div class="matrix-empty" aria-label="Sin disponibilidad">—</div>'}</td>`; }).join('')}</tr>`).join('')}</tbody></table></div><p class="matrix-help">Desliza la tabla para ver todos los grados. Las casillas verdes muestran inventario disponible. Exportación granel permite elegir una cantidad sin inventario registrado.</p>`;
+  $('catalog').innerHTML = `<div class="order-matrix-scroll"><table class="order-matrix"><thead><tr><th scope="col">Color</th>${gradeOrder.map(grade => `<th scope="col"><span>${esc(gradeNames[grade])}</span><small>${format(prices[grade])} / ${grade === 'EUCALIPTO' ? 'tallo' : 'ramo'}</small></th>`).join('')}</tr></thead><tbody>${available.map(row => `<tr><th scope="row"><span class="matrix-color"><span class="swatch" style="background:${row.color === 'COLORES SURTIDOS' ? rainbow : (swatches[row.color] || '#ddd')}"></span>${esc(row.color)}</span></th>${gradeOrder.map(grade => { const eucalyptus = row.color === 'EUCALIPTO' && grade === 'EUCALIPTO', stock = row.grades[grade]?.bunches || 0, qty = cart.get(cartKey(row.color,grade)) || 0, limit = eucalyptus ? 10000 : stock; return `<td>${stock || eucalyptus || qty ? `<div class="matrix-cell ${eucalyptus ? 'matrix-cell--free' : ''} ${qty ? 'matrix-cell--selected' : ''}"><button data-action="minus" data-color="${esc(row.color)}" data-grade="${esc(grade)}" ${qty ? '' : 'disabled'} aria-label="Quitar ${esc(gradeNames[grade])} de ${esc(row.color)}">−</button><input data-color="${esc(row.color)}" data-grade="${esc(grade)}" type="number" inputmode="numeric" min="0" max="${limit}" value="${qty}" aria-label="${eucalyptus ? 'Tallos de eucalipto' : `Ramos de ${esc(row.color)}, ${esc(gradeNames[grade])}`}"><button data-action="plus" data-color="${esc(row.color)}" data-grade="${esc(grade)}" ${qty >= limit ? 'disabled' : ''} aria-label="Agregar ${esc(gradeNames[grade])} de ${esc(row.color)}">+</button><small>${eucalyptus ? 'Tallos · cantidad libre' : `● ${stock} disponibles`}</small></div>` : '<div class="matrix-empty" aria-label="Sin disponibilidad">—</div>'}</td>`; }).join('')}</tr>`).join('')}</tbody></table></div><p class="matrix-help">Colores surtidos usa los mismos ramos de los demás colores, excepto rojos. Eucalipto se pide por tallos y no descuenta rosas.</p>`;
   $('catalog').querySelector('.order-matrix-scroll').scrollLeft = previousScroll;
   renderCart();
+  syncOrderState();
 }
-function setQuantity(color, grade, value) { const stock = grade === 'EXPORTACION GRANEL' ? 10000 : (catalog.find(x => x.color === color)?.grades[grade]?.bunches || 0); const n = Math.max(0, Math.min(stock, Math.trunc(Number(value) || 0))); const key = cartKey(color,grade); if (n) cart.set(key,n); else cart.delete(key); renderCatalog(); }
-function renderCart() { const count = [...cart.values()].reduce((a,b) => a+b,0), total = [...cart].reduce((sum,[key,n]) => sum+n*(prices[key.split('|')[1]]||0),0); $('cart-count').textContent = count ? `${count} ${count === 1 ? 'ramo' : 'ramos'}` : 'Sin productos'; $('cart-total').textContent = format(total); $('cart-bar').classList.toggle('hidden', role !== 'customer' || !count); }
-async function loadCatalog() { const data = await api('/api/catalog'); catalog = data.colors; prices = data.prices; automaticWhatsApp = data.automaticWhatsApp; $('notification-hint').textContent = automaticWhatsApp ? 'Al realizar el pedido, quedará aprobado de inmediato. Te enviaremos la confirmación por WhatsApp y avisaremos al administrador.' : 'Los pedidos están temporalmente deshabilitados: falta configurar la confirmación automática de WhatsApp.'; $('submit-order').textContent = 'Realizar pedido'; $('submit-order').disabled = !automaticWhatsApp; const picker = $('color-select'), selected = picker.value; picker.replaceChildren(new Option('Selecciona un color', '')); const available = catalog.filter(row => gradeOrder.some(grade => row.grades[grade].bunches > 0)); for (const row of available) picker.add(new Option(row.color, row.color)); $('color-options').innerHTML = available.map(row => `<button type="button" class="color-option ${row.color === 'COLORES SURTIDOS' ? 'assorted' : ''}" data-color-option="${esc(row.color)}" style="background-color:${colorTints[row.color] || '#fff'}"><span class="swatch" style="background:${swatches[row.color] || '#ddd'}"></span>${esc(row.color)}</button>`).join(''); if ([...picker.options].some(option => option.value === selected)) picker.value = selected; renderCatalog(); }
+function setQuantity(color, grade, value) {
+  const stock = color === 'EUCALIPTO' && grade === 'EUCALIPTO' ? 10000 : (catalog.find(x => x.color === color)?.grades[grade]?.bunches || 0);
+  const quantity = Math.max(0, Math.min(stock, Math.trunc(Number(value) || 0)));
+  const key = cartKey(color, grade), previous = cart.get(key) || 0;
+  if (quantity) cart.set(key, quantity); else cart.delete(key);
+  const issue = cartIssue();
+  if (issue && quantity > previous) { if (previous) cart.set(key, previous); else cart.delete(key); toast(issue); }
+  renderCatalog();
+}
+function renderCart() { const count = [...cart.values()].reduce((a,b) => a+b,0), total = [...cart].reduce((sum,[key,n]) => sum+n*(prices[key.split('|')[1]]||0),0); $('cart-count').textContent = count ? `${count} unidades` : 'Sin productos'; $('cart-total').textContent = format(total); $('cart-bar').classList.toggle('hidden', role !== 'customer' || !count); }
+async function loadCatalog() {
+  const priorIssue = cartIssue();
+  const data = await api('/api/catalog'); catalog = data.colors; prices = data.prices; automaticWhatsApp = data.automaticWhatsApp;
+  $('notification-hint').textContent = automaticWhatsApp ? 'Al realizar el pedido, quedará aprobado de inmediato. Te enviaremos la confirmación por WhatsApp y avisaremos al administrador.' : 'Los pedidos están temporalmente deshabilitados: falta configurar la confirmación automática de WhatsApp.';
+  $('submit-order').textContent = 'Realizar pedido';
+  const picker = $('color-select'), selected = picker.value; picker.replaceChildren(new Option('Selecciona un color', ''));
+  const available = catalog.filter(row => row.color === 'EUCALIPTO' || gradeOrder.some(grade => row.grades[grade].bunches > 0) || [...cart.keys()].some(key => key.startsWith(`${row.color}|`)));
+  for (const row of available) picker.add(new Option(row.color, row.color));
+  $('color-options').innerHTML = available.map(row => `<button type="button" class="color-option ${row.color === 'COLORES SURTIDOS' ? 'assorted' : ''}" data-color-option="${esc(row.color)}" style="background-color:${colorTints[row.color] || '#fff'}"><span class="swatch" style="background:${swatches[row.color] || '#ddd'}"></span>${esc(row.color)}</button>`).join('');
+  if ([...picker.options].some(option => option.value === selected)) picker.value = selected;
+  renderCatalog();
+  if (!priorIssue && cartIssue()) toast('El inventario cambió. Ajusta tu pedido antes de continuar.');
+}
 async function loadMyOrders() { const orders = await api('/api/my-orders'); $('my-orders').innerHTML = orders.map(order => orderHtml(order,false)).join('') || '<p>Aún no tienes pedidos.</p>'; }
 function orderHtml(order, admin) {
   const status = order.status === 'APROBADO' ? 'approved' : ['RECHAZADO','CANCELADO'].includes(order.status) ? 'rejected' : '';
   const active = ['PENDIENTE','APROBADO'].includes(order.status);
-  return `<article class="order-card" id="order-${order.id}"><div class="order-top"><div><h3>Pedido #${order.id}${admin ? ` · ${esc(order.name)}` : ''}</h3><p>${new Date(order.created_at).toLocaleString('es-CO')}${admin ? ` · ${esc(order.phone)}` : ''}</p></div><span class="pill ${status}">${esc(order.status)}</span></div><div class="item-list">${order.items.map(item => `<span class="color-item" style="background:${item.color === 'COLORES SURTIDOS' ? rainbow : (colorTints[item.color] || '#f7eff2')};border-left:5px solid ${item.color === 'COLORES SURTIDOS' ? '#7a68b0' : (swatches[item.color] || '#ddd')}">${esc(item.color)} · ${esc(gradeNames[item.grade] || item.grade)} · ${item.bunches} ramos</span>`).join('')}</div>${order.pickup_date ? `<p class="pickup-summary">Recogida: ${esc(String(order.pickup_date).slice(0,10))} · ${String(order.pickup_hour).padStart(2,'0')}:00</p>` : ''}<p><strong>${format(order.total)}</strong>${order.notes ? ` · ${esc(order.notes)}` : ''}</p>${admin && order.whatsapp_status ? `<p class="notice-status">Aviso WhatsApp: ${order.whatsapp_status === 'SOLICITADO' ? 'aceptado por Meta' : order.whatsapp_status === 'ERROR' ? 'falló; se reintentará' : order.whatsapp_status === 'CANCELADO' ? 'cancelado' : automaticWhatsApp ? 'en proceso' : 'pendiente de configurar'}${order.whatsapp_status === 'ERROR' && order.whatsapp_error ? `<br><strong>${esc(order.whatsapp_error)}</strong>` : ''}</p>` : ''}${order.rejection_reason ? `<p>Motivo: ${esc(order.rejection_reason)}</p>` : ''}${admin ? `<div class="order-actions">${order.status === 'PENDIENTE' ? `<button class="primary" data-decision="APROBADO" data-id="${order.id}">Aprobar pedido</button><button class="danger" data-decision="RECHAZADO" data-id="${order.id}">Rechazar</button>` : ''}${active ? `<button class="secondary" data-cancel-order="${order.id}">Cancelar pedido</button>` : ''}<button class="danger" data-delete-order="${order.id}">Eliminar pedido</button></div>` : ''}</article>`;
+  return `<article class="order-card" id="order-${order.id}"><div class="order-top"><div><h3>Pedido #${order.id}${admin ? ` · ${esc(order.name)}` : ''}</h3><p>${new Date(order.created_at).toLocaleString('es-CO')}${admin ? ` · ${esc(order.phone)}` : ''}</p></div><span class="pill ${status}">${esc(order.status)}</span></div><div class="item-list">${order.items.map(item => `<span class="color-item" style="background:${item.color === 'COLORES SURTIDOS' ? rainbow : (colorTints[item.color] || '#f7eff2')};border-left:5px solid ${item.color === 'COLORES SURTIDOS' ? '#7a68b0' : (swatches[item.color] || '#ddd')}">${esc(item.color)} · ${esc(gradeNames[item.grade] || item.grade)} · ${unit(item.grade, item.bunches)}</span>`).join('')}</div>${order.pickup_date ? `<p class="pickup-summary">Recogida: ${esc(String(order.pickup_date).slice(0,10))} · ${String(order.pickup_hour).padStart(2,'0')}:00</p>` : ''}<p><strong>${format(order.total)}</strong>${order.notes ? ` · ${esc(order.notes)}` : ''}</p>${admin && order.whatsapp_status ? `<p class="notice-status">Aviso WhatsApp: ${order.whatsapp_status === 'SOLICITADO' ? 'aceptado por Meta' : order.whatsapp_status === 'ERROR' ? 'falló; se reintentará' : order.whatsapp_status === 'CANCELADO' ? 'cancelado' : automaticWhatsApp ? 'en proceso' : 'pendiente de configurar'}${order.whatsapp_status === 'ERROR' && order.whatsapp_error ? `<br><strong>${esc(order.whatsapp_error)}</strong>` : ''}</p>` : ''}${order.rejection_reason ? `<p>Motivo: ${esc(order.rejection_reason)}</p>` : ''}${admin ? `<div class="order-actions">${order.status === 'PENDIENTE' ? `<button class="primary" data-decision="APROBADO" data-id="${order.id}">Aprobar pedido</button><button class="danger" data-decision="RECHAZADO" data-id="${order.id}">Rechazar</button>` : ''}${active ? `<button class="secondary" data-cancel-order="${order.id}">Cancelar pedido</button>` : ''}<button class="danger" data-delete-order="${order.id}">Eliminar pedido</button></div>` : ''}</article>`;
 }
 function renderCustomers(customers) {
   adminCustomers = customers;
@@ -105,7 +152,7 @@ async function loadAdmin() {
   prices = data.prices;
   automaticWhatsApp = data.automaticWhatsApp;
   $('whatsapp-state').textContent = automaticWhatsApp ? 'Cada pedido nuevo se aprueba al registrarse. Se solicita un aviso a tu WhatsApp y una confirmación al cliente.' : 'La confirmación automática no está configurada: ' + data.whatsappConfigurationIssues.join('; ');
-  $('prices-form').innerHTML = gradeOrder.map(g => `<label>${gradeNames[g]} · COP / ramo<input name="${g}" type="number" min="1" step="1" value="${prices[g] || ''}" required></label>`).join('') + '<button class="primary">Guardar precios</button>';
+  $('prices-form').innerHTML = gradeOrder.map(g => `<label>${gradeNames[g]} · COP / ${g === 'EUCALIPTO' ? 'tallo' : 'ramo'}<input name="${g}" type="number" min="1" step="1" value="${prices[g] || ''}" required></label>`).join('') + '<button class="primary">Guardar precios</button>';
   $('pending-count').textContent = data.orders.length;
   renderAdminOrders(data.orders);
   const target = new URLSearchParams(location.search).get('pedido');
@@ -116,20 +163,25 @@ async function loadAdmin() {
   renderCustomers(data.customers);
   await loadAdminInventory().catch(error => { $('inventory-summary').textContent = `No se pudo cargar el inventario: ${error.message}`; });
 }
-async function init() { const s = await api('/api/session'); role = s.role; if (role === 'customer') { show('customer'); $('greeting').textContent = `Hola, ${s.name} 👋`; await loadCatalog(); await loadMyOrders(); } else if (role === 'admin') { show('admin'); await loadAdmin(); if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission(); } else show('login'); }
+async function init() { const s = await api('/api/session'); role = s.role; catalogEvents?.close(); catalogEvents = null; if (role === 'customer') { show('customer'); $('greeting').textContent = `Hola, ${s.name} 👋`; await loadCatalog(); await loadMyOrders(); catalogEvents = new EventSource('/api/catalog/events'); catalogEvents.addEventListener('inventory', () => { if (!ordering) void loadCatalog().catch(() => {}); }); } else if (role === 'admin') { show('admin'); await loadAdmin(); if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission(); } else show('login'); }
 $('login-form').addEventListener('submit', async e => { e.preventDefault(); $('login-error').textContent=''; try { await api('/api/login', { method:'POST',body:JSON.stringify({ role:$('admin-mode').checked?'admin':'customer',phone:$('phone').value,password:$('password').value }) }); $('password').value=''; await init(); } catch (err) { $('login-error').textContent=err.message; } });
-$('logout').addEventListener('click', async () => { await api('/api/logout',{method:'POST'}); cart.clear(); role=null; show('login'); });
+$('logout').addEventListener('click', async () => { await api('/api/logout',{method:'POST'}); catalogEvents?.close(); catalogEvents = null; cart.clear(); role=null; show('login'); });
 $('catalog').addEventListener('click', e => { const b=e.target.closest('button[data-action]'); if (!b) return; const key=cartKey(b.dataset.color,b.dataset.grade); setQuantity(b.dataset.color,b.dataset.grade,(cart.get(key)||0)+(b.dataset.action==='plus'?1:-1)); });
 $('catalog').addEventListener('change', e => { const input=e.target.closest('input[data-color]'); if(input) setQuantity(input.dataset.color,input.dataset.grade,input.value); });
 $('color-select').addEventListener('change', renderCatalog);
 $('color-options').addEventListener('click', e => { const option = e.target.closest('[data-color-option]'); if (!option) return; $('color-select').value = option.dataset.colorOption; $('color-menu').open = false; renderCatalog(); });
 $('refresh').addEventListener('click', async () => { try { await loadCatalog(); toast('Inventario actualizado.'); } catch(e) { toast(e.message); } });
-$('review').addEventListener('click', () => { $('review-items').innerHTML=`<div class="review-list">${[...cart].map(([key,n])=>{const [color,grade]=key.split('|');const background=color === 'COLORES SURTIDOS' ? rainbow : (colorTints[color] || '#f7eff2');return `<div class="review-product" style="--review-tint:${background}"><div class="review-product-name"><span class="review-swatch" style="background:${color === 'COLORES SURTIDOS' ? rainbow : (swatches[color] || '#ddd')}"></span><div><strong>${esc(color)}</strong><small>${esc(gradeNames[grade] || grade)}</small></div></div><div class="review-product-numbers"><span>${n} ${n === 1 ? 'ramo' : 'ramos'}</span><strong>${format(n*prices[grade])}</strong></div></div>`;}).join('')}</div><div class="review-total"><span>Total estimado</span><strong>${$('cart-total').textContent}</strong></div>`; $('order-error').textContent=''; const today = new Date(); $('pickup-date').min = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`; $('review-dialog').showModal(); });
+$('review').addEventListener('click', () => { $('review-items').innerHTML=`<div class="review-list">${[...cart].map(([key,n])=>{const [color,grade]=key.split('|');const background=color === 'COLORES SURTIDOS' ? rainbow : (colorTints[color] || '#f7eff2');return `<div class="review-product" style="--review-tint:${background}"><div class="review-product-name"><span class="review-swatch" style="background:${color === 'COLORES SURTIDOS' ? rainbow : (swatches[color] || '#ddd')}"></span><div><strong>${esc(color)}</strong><small>${esc(gradeNames[grade] || grade)}</small></div></div><div class="review-product-numbers"><span>${unit(grade,n)}</span><strong>${format(n*prices[grade])}</strong></div></div>`;}).join('')}</div><div class="review-total"><span>Total estimado</span><strong>${$('cart-total').textContent}</strong></div>`; $('order-error').textContent=''; const today = new Date(); $('pickup-date').min = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`; $('review-dialog').showModal(); syncOrderState(); });
 $('submit-order').addEventListener('click', async () => {
-  $('submit-order').disabled = true;
+  if (ordering) return;
+  ordering = true;
+  syncOrderState();
   try {
     const date = $('pickup-date').value, hour = $('pickup-hour').value;
     if (!date || hour === '') throw new Error('Selecciona el día y la hora de recogida.');
+    await loadCatalog();
+    const issue = cartIssue();
+    if (issue) throw new Error(issue);
     const items = [...cart].map(([key,bunches]) => { const [color,grade] = key.split('|'); return { color,grade,bunches }; });
     const result = await api('/api/orders', { method:'POST', body:JSON.stringify({ items, notes:$('order-notes').value, pickupDate:date, pickupHour:hour }) });
     cart.clear();
@@ -138,8 +190,8 @@ $('submit-order').addEventListener('click', async () => {
     $('order-success-summary').textContent = `Pedido #${result.id} · ${format(result.total)} · Recogida ${date} a las ${String(hour).padStart(2,'0')}:00`;
     $('order-success-dialog').showModal();
     void Promise.all([loadCatalog(), loadMyOrders()]).catch(() => toast('Actualiza la página para ver el pedido y la disponibilidad.'));
-  } catch (error) { $('order-error').textContent = error.message; }
-  finally { $('submit-order').disabled = !automaticWhatsApp; }
+  } catch (error) { if (error.status === 409) await loadCatalog().catch(() => {}); $('order-error').textContent = error.message; }
+  finally { ordering = false; syncOrderState(false); }
 });
 $('close-order-success').addEventListener('click', () => $('order-success-dialog').close());
 $('prices-form').addEventListener('submit', async e => { e.preventDefault(); try { const values=Object.fromEntries(new FormData(e.target)); await api('/api/admin/prices',{method:'PUT',body:JSON.stringify(values)}); $('prices-message').textContent='Precios guardados para todos los clientes.'; } catch(err) { $('prices-message').textContent=err.message; } });
@@ -154,5 +206,5 @@ $('admin-orders').addEventListener('click', async e => { const button = e.target
 $('admin-refresh').addEventListener('click', () => loadAdmin().catch(e => toast(e.message)));
 $('inventory-refresh').addEventListener('click', () => loadAdminInventory().then(() => toast('Inventario actualizado.')).catch(error => toast(error.message)));
 $('inventory-grade').addEventListener('change', renderAdminInventory);
-setInterval(() => { if(role==='customer') Promise.all([loadCatalog(),loadMyOrders()]).catch(()=>{}); if(role==='admin') loadAdmin().catch(()=>{}); },10000);
+setInterval(() => { if(role==='customer' && !ordering) Promise.all([loadCatalog(),loadMyOrders()]).catch(()=>{}); if(role==='admin') loadAdmin().catch(()=>{}); },10000);
 init().catch(e => { $('login-error').textContent=e.message; show('login'); });

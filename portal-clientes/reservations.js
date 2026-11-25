@@ -1,14 +1,20 @@
+function insufficientInventory(message) {
+  const error = new Error(message);
+  error.code = 'INSUFFICIENT_INVENTORY';
+  return error;
+}
+
 function allocateReservations(catalog, requested, assortedColors) {
   const remaining = new Map(catalog.flatMap(row => Object.entries(row.grades).map(([grade, stock]) => [`${row.color}|${grade}`, Number(stock.bunches)])));
   const allocations = [];
-  for (const item of requested.filter(item => item.color !== 'COLORES SURTIDOS' && item.grade !== 'EXPORTACION GRANEL')) {
+  for (const item of requested.filter(item => item.color !== 'COLORES SURTIDOS' && !['EXPORTACION GRANEL', 'EUCALIPTO'].includes(item.grade))) {
     const key = `${item.color}|${item.grade}`;
     const available = remaining.get(key) || 0;
-    if (item.bunches > available) throw new Error(`Inventario insuficiente de ${item.color} · ${item.grade}.`);
+    if (item.bunches > available) throw insufficientInventory(`Inventario insuficiente de ${item.color} · ${item.grade}. Revisa las cantidades disponibles.`);
     remaining.set(key, available - item.bunches);
     allocations.push({ color: item.color, grade: item.grade, bunches: item.bunches });
   }
-  for (const item of requested.filter(item => item.color === 'COLORES SURTIDOS' && item.grade !== 'EXPORTACION GRANEL')) {
+  for (const item of requested.filter(item => item.color === 'COLORES SURTIDOS' && !['EXPORTACION GRANEL', 'EUCALIPTO'].includes(item.grade))) {
     let needed = item.bunches;
     for (const color of assortedColors) {
       const key = `${color}|${item.grade}`;
@@ -20,7 +26,7 @@ function allocateReservations(catalog, requested, assortedColors) {
       }
       if (!needed) break;
     }
-    if (needed) throw new Error(`No hay suficientes ramos para colores surtidos · ${item.grade}.`);
+    if (needed) throw insufficientInventory(`No hay suficientes ramos para colores surtidos · ${item.grade}. Revisa las cantidades disponibles.`);
   }
   return allocations;
 }

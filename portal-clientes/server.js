@@ -18,7 +18,7 @@ if (!adminPassword || !sessionSecret) throw new Error('Configure PORTAL_ADMIN_PA
 const app = express();
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false });
 const secret = sessionSecret;
-const grades = ['NACIONAL', 'BAJAS', 'NACIONAL GRANEL', 'BAJAS GRANEL', 'EXPORTACION GRANEL'];
+const grades = ['NACIONAL', 'BAJAS', 'NACIONAL GRANEL', 'BAJAS GRANEL', 'EUCALIPTO'];
 const colorGroups = [
   ['ROJOS', ['FREEDOM', 'EXPLORER']],
   ['BLANCOS', ['VENDELA', 'MONDIAL', 'CANDLELIGHT', 'WHITE OHARA']],
@@ -34,7 +34,7 @@ const colorGroups = [
 const assortedColor = 'COLORES SURTIDOS';
 const regularColors = colorGroups.map(([name]) => name);
 const assortedColors = regularColors.filter(color => color !== 'ROJOS');
-const colors = [...regularColors, assortedColor];
+const colors = [...regularColors, assortedColor, 'EUCALIPTO'];
 const colorOf = new Map(colorGroups.flatMap(([color, names]) => names.map(name => [name, color])));
 const norm = value => String(value || '').trim().replace(/\s+/g, ' ').toUpperCase();
 function loginIdentifier(value) {
@@ -46,6 +46,10 @@ function loginIdentifier(value) {
 }
 const money = value => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(value);
 const loginFailures = new Map();
+const catalogListeners = new Set();
+function broadcastCatalogChanged() {
+  for (const response of catalogListeners) response.write('event: inventory\ndata: changed\n\n');
+}
 
 app.disable('x-powered-by');
 app.use('/webhooks/whatsapp', express.json({ limit: '2mb', verify(req, _res, body) { req.rawBody = Buffer.from(body); } }));
@@ -241,7 +245,7 @@ async function init() {
       await pool.query('INSERT INTO portal_prices(grade,price_per_bunch) VALUES($1,$2) ON CONFLICT DO NOTHING', [grade, price]);
     }
   }
-  await pool.query("INSERT INTO portal_prices(grade,price_per_bunch) VALUES('EXPORTACION GRANEL',9000) ON CONFLICT DO NOTHING");
+  await pool.query("INSERT INTO portal_prices(grade,price_per_bunch) VALUES('EUCALIPTO',1000) ON CONFLICT DO NOTHING");
 }
 app.get('/api/session', async (req, res) => {
   try { const s = session(req); if (!s) return res.json({ role: null }); if (s.role === 'admin') return res.json({ role: 'admin' }); const { rows } = await pool.query('SELECT id,name FROM portal_customers WHERE id=$1 AND active=TRUE', [s.id]); res.json(rows[0] ? { role: 'customer', name: rows[0].name } : { role: null }); } catch (e) { fail(res, e, 500); }
@@ -268,6 +272,14 @@ app.post('/api/login', async (req, res) => {
 });
 app.post('/api/logout', (_req, res) => { res.setHeader('Set-Cookie', 'portal_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'); res.json({ ok: true }); });
 app.get('/api/catalog', auth('customer'), async (_req, res) => { try { res.json({ colors: await availability(), prices: await prices(), automaticWhatsApp: Boolean(whatsapp.customerConfig()) }); } catch (e) { fail(res, e, 500); } });
+app.get('/api/catalog/events', auth('customer'), (req, res) => {
+  res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive' });
+  res.flushHeaders();
+  res.write('retry: 3000\n\n');
+  catalogListeners.add(res);
+  const heartbeat = setInterval(() => res.write(': keepalive\n\n'), 25000);
+  req.on('close', () => { clearInterval(heartbeat); catalogListeners.delete(res); });
+});
 app.get('/api/my-orders', auth('customer'), async (req, res) => { try { const { rows } = await pool.query(`SELECT o.*,COALESCE(json_agg(json_build_object('color',i.color,'grade',i.grade,'bunches',i.bunches,'subtotal',i.subtotal)) FILTER (WHERE i.id IS NOT NULL),'[]') AS items FROM portal_orders o LEFT JOIN portal_order_items i ON i.order_id=o.id WHERE o.customer_id=$1 GROUP BY o.id ORDER BY o.id DESC LIMIT 50`, [req.session.id]); res.json(rows); } catch (e) { fail(res, e, 500); } });
 app.post('/api/orders', auth('customer'), async (req, res) => {
   if (!whatsapp.customerConfig()) return res.status(503).json({ error: 'La confirmación automática de WhatsApp aún no está configurada. Comunícate con el administrador.' });
@@ -290,7 +302,7 @@ app.post('/api/orders', auth('customer'), async (req, res) => {
     const requested = new Map(); let total = 0;
     for (const item of items) {
       const color = norm(item.color), grade = norm(item.grade), bunches = Number(item.bunches);
-      if (!colors.includes(color) || !grades.includes(grade) || !Number.isSafeInteger(bunches) || bunches < 1 || bunches > 10000) throw new Error('Cantidad o producto no válido.');
+      if (!colors.includes(color) || !grades.includes(grade) || (grade === 'EUCALIPTO') !== (color === 'EUCALIPTO') || !Number.isSafeInteger(bunches) || bunches < 1 || bunches > 10000) throw new Error('Cantidad o producto no válido.');
       const key = `${color}|${grade}`; requested.set(key, (requested.get(key) || 0) + bunches);
       total += bunches * p[grade];
     }
@@ -305,9 +317,10 @@ app.post('/api/orders', auth('customer'), async (req, res) => {
     await client.query('INSERT INTO portal_customer_notifications(order_id) VALUES($1)', [order.rows[0].id]);
     await client.query('COMMIT');
     res.status(201).json({ id: order.rows[0].id, total, status: 'APROBADO' });
+    broadcastCatalogChanged();
     void processWhatsAppQueue();
     void processCustomerWhatsAppQueue();
-  } catch (e) { await client.query('ROLLBACK'); fail(res, e); } finally { client.release(); }
+  } catch (e) { await client.query('ROLLBACK'); fail(res, e, e.code === 'INSUFFICIENT_INVENTORY' ? 409 : 400); } finally { client.release(); }
 });
 app.get('/api/admin', auth('admin'), async (_req, res) => {
   try {
@@ -381,11 +394,12 @@ app.delete('/api/admin/customers/:id', auth('admin'), async (req, res) => {
     await client.query('DELETE FROM portal_orders WHERE customer_id=$1', [id]);
     await client.query('DELETE FROM portal_customers WHERE id=$1', [id]);
     await client.query('COMMIT');
+    broadcastCatalogChanged();
     res.json({ deleted: true });
   } catch (error) { await client.query('ROLLBACK'); fail(res, error, 500); } finally { client.release(); }
 });
 app.put('/api/admin/prices', auth('admin'), async (req, res) => {
-  try { for (const grade of grades) { const value = Number(req.body[grade]); if (!Number.isSafeInteger(value) || value < 1 || value > 100000000) throw new Error(`Precio inválido para ${grade}.`); } for (const grade of grades) await pool.query('UPDATE portal_prices SET price_per_bunch=$1,updated_at=NOW() WHERE grade=$2', [req.body[grade], grade]); res.json({ prices: await prices() }); } catch (e) { fail(res, e); }
+  try { for (const grade of grades) { const value = Number(req.body[grade]); if (!Number.isSafeInteger(value) || value < 1 || value > 100000000) throw new Error(`Precio inválido para ${grade}.`); } for (const grade of grades) await pool.query('UPDATE portal_prices SET price_per_bunch=$1,updated_at=NOW() WHERE grade=$2', [req.body[grade], grade]); broadcastCatalogChanged(); res.json({ prices: await prices() }); } catch (e) { fail(res, e); }
 });
 app.delete('/api/admin/orders/:id', auth('admin'), async (req, res) => {
   const id = Number(req.params.id);
@@ -398,6 +412,7 @@ app.delete('/api/admin/orders/:id', auth('admin'), async (req, res) => {
     await client.query('DELETE FROM portal_order_items WHERE order_id=$1', [id]);
     await client.query('DELETE FROM portal_orders WHERE id=$1', [id]);
     await client.query('COMMIT');
+    broadcastCatalogChanged();
     res.json({ deleted: true });
   } catch (error) { await client.query('ROLLBACK'); fail(res, error, 500); } finally { client.release(); }
 });
@@ -416,6 +431,7 @@ app.post('/api/admin/orders/:id/cancel', auth('admin'), async (req, res) => {
     await client.query("UPDATE portal_whatsapp_notifications SET status='CANCELADO',updated_at=NOW() WHERE order_id=$1 AND status<>'SOLICITADO'", [id]);
     await client.query("UPDATE portal_customer_notifications SET status='CANCELADO',updated_at=NOW() WHERE order_id=$1 AND status<>'SOLICITADO'", [id]);
     await client.query('COMMIT');
+    broadcastCatalogChanged();
     res.json({ id, status: 'CANCELADO' });
   } catch (error) { await client.query('ROLLBACK'); fail(res, error, 500); } finally { client.release(); }
 });
@@ -443,6 +459,7 @@ async function decideOrder(id, decision, reason = '', notificationMessageId = nu
     const automaticConfirmation = decision === 'APROBADO' && Boolean(whatsapp.customerConfig());
     if (automaticConfirmation) await client.query('INSERT INTO portal_customer_notifications(order_id) VALUES($1) ON CONFLICT DO NOTHING', [order.id]);
     await client.query('COMMIT');
+    broadcastCatalogChanged();
     if (automaticConfirmation) void processCustomerWhatsAppQueue();
     const message = decision === 'APROBADO' ? `Hola ${order.name}, tu pedido #${order.id} de Prestige Roses fue aprobado. Total a pagar: ${money(order.total)}. Pronto coordinaremos la entrega.` : `Hola ${order.name}, tu pedido #${order.id} de Prestige Roses no pudo ser aprobado. ${String(reason || '').trim()}`;
     return { id: order.id, status: decision, automaticConfirmation, message, whatsappUrl: automaticConfirmation ? null : `https://wa.me/${order.phone.replace(/\D/g, '')}?text=${encodeURIComponent(message)}` };

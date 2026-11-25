@@ -143,12 +143,12 @@ function formatOrderItems(items) {
     const colors = groups.get(item.grade);
     colors.set(item.color, (colors.get(item.color) || 0) + Number(item.bunches));
   }
-  const gradeOrder = ['BAJAS', 'NACIONAL', 'BAJAS GRANEL', 'NACIONAL GRANEL', 'EXPORTACION GRANEL'];
-  const gradeNames = { BAJAS: 'BAJAS BONCHADAS', NACIONAL: 'NACIONAL BONCHADO', 'BAJAS GRANEL': 'BAJAS GRANEL', 'NACIONAL GRANEL': 'NACIONAL GRANEL', 'EXPORTACION GRANEL': 'EXPORTACIÓN GRANEL' };
+  const gradeOrder = ['BAJAS', 'NACIONAL', 'BAJAS GRANEL', 'NACIONAL GRANEL', 'EUCALIPTO', 'EXPORTACION GRANEL'];
+  const gradeNames = { BAJAS: 'BAJAS BONCHADAS', NACIONAL: 'NACIONAL BONCHADO', 'BAJAS GRANEL': 'BAJAS GRANEL', 'NACIONAL GRANEL': 'NACIONAL GRANEL', EUCALIPTO: 'EUCALIPTO', 'EXPORTACION GRANEL': 'EXPORTACIÓN GRANEL' };
   return [...groups.keys()].sort((a, b) => gradeOrder.indexOf(a) - gradeOrder.indexOf(b)).map(grade => {
     const lines = [...groups.get(grade)].map(([color, bunches]) => {
       const label = color.charAt(0) + color.slice(1).toLocaleLowerCase('es-CO');
-      return `${label}: ${bunches} ${bunches === 1 ? 'ramo' : 'ramos'}`;
+      return `${label}: ${bunches} ${grade === 'EUCALIPTO' ? (bunches === 1 ? 'tallo' : 'tallos') : (bunches === 1 ? 'ramo' : 'ramos')}`;
     });
     return `*${gradeNames[grade] || grade}*: ${lines.join('; ')}`;
   }).join(' | ');
