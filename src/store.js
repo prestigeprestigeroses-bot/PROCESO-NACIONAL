@@ -1179,6 +1179,33 @@ async function listPortalReservations() {
   return rows;
 }
 
+async function listPortalOrders() {
+  if (!usePostgres) return null;
+  const { rows: tables } = await pool.query("SELECT to_regclass('public.portal_orders') AS orders, to_regclass('public.portal_order_items') AS items, to_regclass('public.portal_customers') AS customers");
+  if (!tables[0].orders || !tables[0].items || !tables[0].customers) return null;
+  const { rows } = await pool.query(`
+    SELECT o.id, o.status, o.pickup_date::text AS pickup_date, o.pickup_hour,
+           o.created_at, c.name, c.phone, i.color, i.grade, i.bunches
+    FROM portal_orders o
+    JOIN portal_customers c ON c.id = o.customer_id
+    LEFT JOIN portal_order_items i ON i.order_id = o.id
+    WHERE o.status IN ('PENDIENTE', 'APROBADO')
+    ORDER BY CASE WHEN o.pickup_date >= (NOW() AT TIME ZONE 'America/Bogota')::date THEN 0 ELSE 1 END,
+             CASE WHEN o.pickup_date >= (NOW() AT TIME ZONE 'America/Bogota')::date THEN o.pickup_date END ASC NULLS LAST,
+             o.pickup_date DESC NULLS LAST, o.id DESC, i.grade, i.color
+  `);
+  const orders = new Map();
+  for (const row of rows) {
+    if (!orders.has(row.id)) orders.set(row.id, {
+      id: Number(row.id), status: row.status, pickupDate: row.pickup_date,
+      pickupHour: row.pickup_hour == null ? null : Number(row.pickup_hour),
+      createdAt: row.created_at, name: row.name, phone: row.phone, items: []
+    });
+    if (row.color && row.grade) orders.get(row.id).items.push({ color: row.color, grade: row.grade, bunches: Number(row.bunches) });
+  }
+  return [...orders.values()];
+}
+
 async function createWaste(input) {
   if (input.group) return createGroupedWaste(input);
   const key = String(input.key || '');
@@ -1485,4 +1512,4 @@ async function inventoryReport(from, to) {
   return { from: start, to: end, opening, closing };
 }
 
-module.exports = { init, listInventory, listInventoryAdjustments, reconcileInventory, cancelInventoryAdjustment, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, assignRemissionItems, setRemissionPrices, updateRemissionNotes, cancelRemission, renumberRemissions, listExportTransfers, createExportTransfer, cancelExportTransfer, listGradeTransfers, createGradeTransfer, listWaste, listPortalReservations, createWaste, cancelWaste, listRemissions, searchRemissions, getRemission, dashboard, salesReport, wasteReport, movementsReport, inventoryReport, usePostgres };
+module.exports = { init, listInventory, listInventoryAdjustments, reconcileInventory, cancelInventoryAdjustment, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, assignRemissionItems, setRemissionPrices, updateRemissionNotes, cancelRemission, renumberRemissions, listExportTransfers, createExportTransfer, cancelExportTransfer, listGradeTransfers, createGradeTransfer, listWaste, listPortalReservations, listPortalOrders, createWaste, cancelWaste, listRemissions, searchRemissions, getRemission, dashboard, salesReport, wasteReport, movementsReport, inventoryReport, usePostgres };

@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles.css?v=20260920-2">
+  <link rel="stylesheet" href="/styles.css?v=20261126-2">
   <title>Prestige Roses · Inventario y remisiones</title>
 </head>
 <body>
@@ -42,6 +42,7 @@
       <nav aria-label="Navegación principal">
         <button class="nav-link active" data-view="dashboard"><span class="nav-icon">⌂</span>Resumen</button>
         <button class="nav-link" data-view="inventory"><span class="nav-icon">▦</span>Inventario</button>
+        <button class="nav-link" data-view="orders"><span class="nav-icon">▤</span>Pedidos</button>
         <button class="nav-link" data-view="prices"><span class="nav-icon">$</span>Lista de precios</button>
         <button class="nav-link" data-view="new-remission"><span class="nav-icon">＋</span>Nueva remisión</button>
         <button class="nav-link" data-view="history"><span class="nav-icon">≡</span>Historial</button>
@@ -126,6 +127,12 @@
           <details class="panel inventory-reconcile transfer-history" id="transfer-history-panel"><summary><strong>Historial de traslados</strong><span>Ver movimientos ▾</span></summary><div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Variedad</th><th>Ramos</th><th>Tallos</th><th>Responsable</th><th>Motivo</th><th>Estado</th><th></th></tr></thead><tbody id="transfer-history-body"></tbody></table></div><div class="empty-state is-hidden" id="transfer-history-empty"><strong>Sin traslados</strong><span>Los movimientos aparecerán aquí.</span></div></details>
           </div>
           </div>
+        </section>
+
+        <section class="view" id="view-orders">
+          <div class="section-heading"><div><h2>Pedidos de clientes</h2><p>Consulta lo solicitado por día de recogida, color y grado.</p></div><button class="button button--ghost" type="button" id="portal-orders-refresh">Actualizar pedidos</button></div>
+          <p class="portal-orders-status" id="portal-orders-status" role="status"></p>
+          <div id="portal-orders-list" class="portal-orders-list"></div>
         </section>
 
         <section class="view" id="view-new-remission">
@@ -253,12 +260,10 @@
         </section>
       </div>
     </main>//HhghgFEFEFEFEh//
-    <aside class="portal-shortage-alert is-hidden" id="portal-shortage-alert" aria-live="polite">
-      <div class="portal-shortage-heading"><span aria-hidden="true">⚠</span><div><strong>Flor por ingresar para pedidos</strong><small id="portal-shortage-total"></small></div></div>
-      <ul id="portal-shortage-list"></ul>
-      <p>Comparación orientativa del inventario físico y los pedidos apartados. Sin vincular pedidos y remisiones, un pedido ya despachado puede seguir apareciendo aquí.</p>
-      <button class="button button--ghost" type="button" id="portal-shortage-remissions">Ir a remisiones</button>
-    </aside>
+    <details class="portal-shortage-alert is-hidden" id="portal-shortage-alert" aria-live="polite" open>
+      <summary class="portal-shortage-heading"><span aria-hidden="true">⚠</span><span><strong>Faltan ramos para pedidos</strong><small id="portal-shortage-total"></small></span><span class="portal-shortage-chevron" aria-hidden="true">⌄</span></summary>
+      <div class="portal-shortage-body"><ul id="portal-shortage-list"></ul><button class="button button--ghost" type="button" id="portal-shortage-remissions">Ver pedidos</button></div>
+    </details>
   </div>
 
   <dialog id="cancel-remission-dialog">
@@ -282,6 +287,6 @@
 
   <div class="toast" id="toast" role="status"></div>
   <datalist id="known-clients"></datalist>
-  <script src="/app.js?v=20260920-9" defer></script>
+  <script src="/app.js?v=20261126-2" defer></script>
 </body>
 </html>

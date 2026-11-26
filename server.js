@@ -162,6 +162,12 @@ app.get('/api/inventory/portal-shortages', requireAuth, async (_request, respons
     response.json({ enabled: true, shortages: buildPortalShortages(inventory, reservations) });
   } catch (error) { next(error); }
 });
+app.get('/api/portal/orders', requireAuth, async (_request, response, next) => {
+  try {
+    const orders = await store.listPortalOrders();
+    response.json({ enabled: orders !== null, orders: orders || [] });
+  } catch (error) { next(error); }
+});
 app.get('/api/inventory/reconciliation', requireAuth, async (_request, response, next) => { try { response.json({ sources: await store.listInventory(true), adjustments: await store.listInventoryAdjustments() }); } catch (error) { next(error); } });
 app.post('/api/inventory/reconciliation', requireAuth, async (request, response, next) => { try { response.status(201).json(await store.reconcileInventory(request.body)); } catch (error) { next(error); } });
 app.put('/api/inventory/reconciliation/:id/cancel', requireAuth, async (request, response, next) => { try { response.json(await store.cancelInventoryAdjustment(request.params.id, request.body)); } catch (error) { next(error); } });

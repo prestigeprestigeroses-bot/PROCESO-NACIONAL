@@ -35,8 +35,9 @@ async function refreshAll() {
   const fresh = { cache: 'no-store' };
   const inventoryRefresh = refreshInventory().catch(() => false);
   const shortageRefresh = refreshPortalShortages().catch(() => false);
+  const ordersRefresh = state.activeView === 'orders' ? refreshPortalOrders().catch(() => false) : Promise.resolve();
   const results = await Promise.allSettled([api('/api/dashboard', fresh), api('/api/config', fresh), api('/api/price-lists', fresh), api('/api/export-transfers', fresh), api('/api/inventory/reconciliation', fresh), api('/api/inventory/waste', fresh), api('/api/inventory/grade-transfers', fresh)]);
-  await Promise.all([inventoryRefresh, shortageRefresh]);
+  await Promise.all([inventoryRefresh, shortageRefresh, ordersRefresh]);
   if (version !== state.refreshVersion) return;
   const [dashboard, config, prices, transfers, reconciliation, waste, gradeTransfers] = results;
   if (dashboard.status === 'fulfilled') { state.remissions = dashboard.value.remissions; state.totals = dashboard.value.totals; renderDashboard(); }
@@ -55,7 +56,7 @@ function renderInventorySyncStatus() {
 }
 
 let shortageFingerprint = '';
-const shortageGradeNames = { NACIONAL: 'Nacional bonchado', BAJAS: 'Bajas bonchadas', 'NACIONAL GRANEL': 'Nacional granel', 'BAJAS GRANEL': 'Bajas granel' };
+const portalGradeNames = { NACIONAL: 'Nacional bonchado', BAJAS: 'Bajas bonchadas', 'NACIONAL GRANEL': 'Nacional granel', 'BAJAS GRANEL': 'Bajas granel', EUCALIPTO: 'Eucalipto' };
 async function refreshPortalShortages() {
   const result = await api('/api/inventory/portal-shortages', { cache: 'no-store' });
   const shortages = result.enabled ? result.shortages : [];
@@ -64,13 +65,51 @@ async function refreshPortalShortages() {
   shortageFingerprint = fingerprint;
   const alert = $('#portal-shortage-alert');
   alert.classList.toggle('is-hidden', shortages.length === 0);
-  if (!shortages.length) return;
+  if (!shortages.length) { alert.open = true; return; }
   const total = shortages.reduce((sum, item) => sum + Number(item.shortage), 0);
-  $('#portal-shortage-total').textContent = `${bunchLabel(total)} por ingresar · ${shortages.length} ${shortages.length === 1 ? 'categoría' : 'categorías'}`;
+  $('#portal-shortage-total').textContent = `Faltan ${bunchLabel(total)} · ${shortages.length} ${shortages.length === 1 ? 'categoría' : 'categorías'}`;
   $('#portal-shortage-list').innerHTML = shortages.map(item => {
-    const orders = item.orders.map(order => `#${Number(order.id)} ${escapeHtml(order.name)} (${escapeHtml(order.pickupDate)})`).join(', ');
-    return `<li><strong>${escapeHtml(item.color)} · ${escapeHtml(shortageGradeNames[item.grade] || item.grade)}</strong><span>Faltan ${bunchLabel(item.shortage)} · Físico ${number(item.physical)} / Apartado ${number(item.reserved)}</span><small>Pedidos: ${orders}</small></li>`;
+    return `<li><strong>${escapeHtml(item.color)} · ${escapeHtml(portalGradeNames[item.grade] || item.grade)}</strong><span>${bunchLabel(item.shortage)} por ingresar</span></li>`;
   }).join('');
+}
+
+let portalOrdersFingerprint = '';
+async function refreshPortalOrders() {
+  const status = $('#portal-orders-status');
+  const result = await api('/api/portal/orders', { cache: 'no-store' });
+  if (!result.enabled) {
+    status.textContent = 'Los pedidos estarán disponibles cuando este sistema y el portal usen el mismo PostgreSQL.';
+    $('#portal-orders-list').replaceChildren();
+    portalOrdersFingerprint = '';
+    return;
+  }
+  const orders = result.orders;
+  status.textContent = `${orders.length} ${orders.length === 1 ? 'pedido activo' : 'pedidos activos'} · se actualiza automáticamente`;
+  const fingerprint = JSON.stringify(orders);
+  if (fingerprint === portalOrdersFingerprint) return;
+  portalOrdersFingerprint = fingerprint;
+  const container = $('#portal-orders-list');
+  const openDays = new Set([...container.querySelectorAll('details[open]')].map(day => day.dataset.date));
+  const days = new Map();
+  for (const order of orders) {
+    const date = order.pickupDate || 'sin-fecha';
+    if (!days.has(date)) days.set(date, []);
+    days.get(date).push(order);
+  }
+  container.innerHTML = [...days].map(([date, dayOrders], index) => {
+    const label = date === 'sin-fecha' ? 'Sin fecha de recogida' : new Intl.DateTimeFormat('es-CO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`));
+    const cards = dayOrders.map(order => {
+      const byGrade = new Map();
+      for (const item of order.items) {
+        if (!byGrade.has(item.grade)) byGrade.set(item.grade, []);
+        byGrade.get(item.grade).push(item);
+      }
+      const products = [...byGrade].map(([grade, items]) => `<section class="portal-order-grade"><h4>${escapeHtml(portalGradeNames[grade] || grade)}</h4><ul>${items.map(item => `<li><span>${escapeHtml(item.color)}</span><strong>${number(item.bunches)} ${grade === 'EUCALIPTO' ? (Number(item.bunches) === 1 ? 'tallo' : 'tallos') : (Number(item.bunches) === 1 ? 'ramo' : 'ramos')}</strong></li>`).join('')}</ul></section>`).join('');
+      const hour = order.pickupHour == null ? '' : ` · ${String(order.pickupHour).padStart(2, '0')}:00`;
+      return `<article class="portal-order-card"><header><div><strong>Pedido #${number(order.id)} · ${escapeHtml(order.name)}</strong><small>${escapeHtml(order.phone)}${hour}</small></div><span class="portal-order-status">${escapeHtml(order.status)}</span></header><div class="portal-order-products">${products || '<p>Sin productos registrados.</p>'}</div></article>`;
+    }).join('');
+    return `<details class="portal-order-day" data-date="${escapeHtml(date)}" ${openDays.has(date) || (!openDays.size && index === 0) ? 'open' : ''}><summary><strong>${escapeHtml(label)}</strong><span>${dayOrders.length} ${dayOrders.length === 1 ? 'pedido' : 'pedidos'}</span></summary><div class="portal-order-cards">${cards}</div></details>`;
+  }).join('') || '<p class="portal-orders-empty">No hay pedidos pendientes ni aprobados.</p>';
 }
 
 async function refreshInventory() {
@@ -441,11 +480,12 @@ function switchView(view) {
   state.activeView = view;
   $$('.view').forEach(element => element.classList.toggle('active', element.id === `view-${view}`));
   $$('.nav-link').forEach(element => element.classList.toggle('active', element.dataset.view === view));
-  const titles = { dashboard: 'Resumen', inventory: 'Inventario', prices: 'Lista de precios', 'new-remission': 'Nueva remisión', history: 'Historial', reports: 'Informes' };
+  const titles = { dashboard: 'Resumen', inventory: 'Inventario', orders: 'Pedidos', prices: 'Lista de precios', 'new-remission': 'Nueva remisión', history: 'Historial', reports: 'Informes' };
   $('#view-title').textContent = titles[view];
   $('#sidebar').classList.remove('open');
   window.scrollTo({ top: 0, behavior: 'smooth' });
   if (view === 'history') loadFullHistory();
+  if (view === 'orders') refreshPortalOrders().catch(error => { $('#portal-orders-status').textContent = `No se pudieron cargar los pedidos: ${error.message}`; });
   if (view === 'new-remission') refreshRemissionInventory();
 }
 
@@ -811,7 +851,8 @@ $('#inventory-grade').addEventListener('change', event => setGradeFilter(event.t
 $$('[data-clear-filters]').forEach(button => button.addEventListener('click', () => { setDateFilter(''); setGradeFilter('ALL'); }));
 $('#step-grade-filter').addEventListener('change', event => { state.stepGrade = event.target.value; renderVarietyOptions(); });
 $('#refresh-remission-inventory').addEventListener('click', () => refreshRemissionInventory(true));
-$('#portal-shortage-remissions').addEventListener('click', () => switchView('new-remission'));
+$('#portal-shortage-remissions').addEventListener('click', () => switchView('orders'));
+$('#portal-orders-refresh').addEventListener('click', () => refreshPortalOrders().catch(error => { $('#portal-orders-status').textContent = `No se pudieron cargar los pedidos: ${error.message}`; }));
 $('#line-variety').addEventListener('change', renderStockPreview);
 $('#remission-client-name').addEventListener('input', renderStockPreview);
 $('#remission-client-name').addEventListener('change', () => {
