@@ -1184,7 +1184,7 @@ async function listPortalOrders() {
   const { rows: tables } = await pool.query("SELECT to_regclass('public.portal_orders') AS orders, to_regclass('public.portal_order_items') AS items, to_regclass('public.portal_customers') AS customers");
   if (!tables[0].orders || !tables[0].items || !tables[0].customers) return null;
   const { rows } = await pool.query(`
-    SELECT o.id, o.status, o.pickup_date::text AS pickup_date, o.pickup_hour,
+    SELECT o.id, o.status, o.total, o.pickup_date::text AS pickup_date, o.pickup_hour,
            o.created_at, c.name, c.phone, i.color, i.grade, i.bunches
     FROM portal_orders o
     JOIN portal_customers c ON c.id = o.customer_id
@@ -1197,7 +1197,7 @@ async function listPortalOrders() {
   const orders = new Map();
   for (const row of rows) {
     if (!orders.has(row.id)) orders.set(row.id, {
-      id: Number(row.id), status: row.status, pickupDate: row.pickup_date,
+      id: Number(row.id), status: row.status, total: Number(row.total), pickupDate: row.pickup_date,
       pickupHour: row.pickup_hour == null ? null : Number(row.pickup_hour),
       createdAt: row.created_at, name: row.name, phone: row.phone, items: []
     });

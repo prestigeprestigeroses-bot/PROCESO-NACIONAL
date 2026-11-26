@@ -74,6 +74,13 @@ async function refreshPortalShortages() {
 }
 
 let portalOrdersFingerprint = '';
+function portalOrderQuantities(order) {
+  return order.items.reduce((totals, item) => {
+    if (item.grade === 'EUCALIPTO') totals.stems += Number(item.bunches);
+    else totals.bunches += Number(item.bunches);
+    return totals;
+  }, { bunches: 0, stems: 0 });
+}
 async function refreshPortalOrders() {
   const status = $('#portal-orders-status');
   const result = await api('/api/portal/orders', { cache: 'no-store' });
@@ -85,7 +92,9 @@ async function refreshPortalOrders() {
   }
   const orders = result.orders;
   status.textContent = `${orders.length} ${orders.length === 1 ? 'pedido activo' : 'pedidos activos'} · se actualiza automáticamente`;
-  const fingerprint = JSON.stringify(orders);
+  const todayParts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Bogota', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()).map(part => [part.type, part.value]));
+  const today = `${todayParts.year}-${todayParts.month}-${todayParts.day}`;
+  const fingerprint = JSON.stringify([today, orders]);
   if (fingerprint === portalOrdersFingerprint) return;
   portalOrdersFingerprint = fingerprint;
   const container = $('#portal-orders-list');
@@ -98,6 +107,15 @@ async function refreshPortalOrders() {
   }
   container.innerHTML = [...days].map(([date, dayOrders], index) => {
     const label = date === 'sin-fecha' ? 'Sin fecha de recogida' : new Intl.DateTimeFormat('es-CO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`));
+    const todayClass = date === today ? 'portal-order-day--today' : 'portal-order-day--other';
+    const dayTotals = dayOrders.reduce((totals, order) => {
+      const quantities = portalOrderQuantities(order);
+      totals.bunches += quantities.bunches;
+      totals.stems += quantities.stems;
+      totals.price += Number(order.total);
+      return totals;
+    }, { bunches: 0, stems: 0, price: 0 });
+    const dayQuantity = `${bunchLabel(dayTotals.bunches)}${dayTotals.stems ? ` · ${number(dayTotals.stems)} tallos de eucalipto` : ''}`;
     const cards = dayOrders.map(order => {
       const byGrade = new Map();
       for (const item of order.items) {
@@ -106,9 +124,10 @@ async function refreshPortalOrders() {
       }
       const products = [...byGrade].map(([grade, items]) => `<section class="portal-order-grade"><h4>${escapeHtml(portalGradeNames[grade] || grade)}</h4><ul>${items.map(item => `<li><span>${escapeHtml(item.color)}</span><strong>${number(item.bunches)} ${grade === 'EUCALIPTO' ? (Number(item.bunches) === 1 ? 'tallo' : 'tallos') : (Number(item.bunches) === 1 ? 'ramo' : 'ramos')}</strong></li>`).join('')}</ul></section>`).join('');
       const hour = order.pickupHour == null ? '' : ` · ${String(order.pickupHour).padStart(2, '0')}:00`;
-      return `<article class="portal-order-card"><header><div><strong>Pedido #${number(order.id)} · ${escapeHtml(order.name)}</strong><small>${escapeHtml(order.phone)}${hour}</small></div><span class="portal-order-status">${escapeHtml(order.status)}</span></header><div class="portal-order-products">${products || '<p>Sin productos registrados.</p>'}</div></article>`;
+      const quantities = portalOrderQuantities(order);
+      return `<article class="portal-order-card"><header><div><strong>Pedido #${number(order.id)} · ${escapeHtml(order.name)}</strong><small>${escapeHtml(order.phone)}${hour}</small></div><span class="portal-order-status">${escapeHtml(order.status)}</span></header><div class="portal-order-products">${products || '<p>Sin productos registrados.</p>'}</div><div class="portal-order-totals"><strong>${bunchLabel(quantities.bunches)}${quantities.stems ? ` · ${number(quantities.stems)} tallos de eucalipto` : ''}</strong><strong>Total estimado: ${money(order.total)}</strong></div></article>`;
     }).join('');
-    return `<details class="portal-order-day" data-date="${escapeHtml(date)}" ${openDays.has(date) || (!openDays.size && index === 0) ? 'open' : ''}><summary><strong>${escapeHtml(label)}</strong><span>${dayOrders.length} ${dayOrders.length === 1 ? 'pedido' : 'pedidos'}</span></summary><div class="portal-order-cards">${cards}</div></details>`;
+    return `<details class="portal-order-day ${todayClass}" data-date="${escapeHtml(date)}" ${openDays.has(date) || (!openDays.size && index === 0) ? 'open' : ''}><summary><strong>${date === today ? 'HOY · ' : ''}${escapeHtml(label)}</strong><span>${dayOrders.length} ${dayOrders.length === 1 ? 'pedido' : 'pedidos'} · ${dayQuantity} · ${money(dayTotals.price)}</span></summary><div class="portal-order-cards">${cards}</div></details>`;
   }).join('') || '<p class="portal-orders-empty">No hay pedidos pendientes ni aprobados.</p>';
 }
 
