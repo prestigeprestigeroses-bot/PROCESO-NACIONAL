@@ -5,8 +5,8 @@
   "description": "Portal independiente de pedidos por color",
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js && node --check inventory.js && node --check inventory-overview.js && node --check reservations.js && node --check whatsapp.js && node --check public/app.js",
-    "test": "node --test whatsapp.test.js reservations.test.js inventory-overview.test.js"
+    "check": "node --check server.js && node --check inventory.js && node --check inventory-overview.js && node --check reservations.js && node --check order-amendment.js && node --check whatsapp.js && node --check public/app.js",
+    "test": "node --test whatsapp.test.js reservations.test.js inventory-overview.test.js order-amendment.test.js"
   },
   "engines": {
     "node": ">=20"

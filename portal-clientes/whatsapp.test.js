@@ -67,9 +67,14 @@ test('el botón identifica el pedido y la confirmación usa el teléfono del cli
       assert.doesNotMatch(parameter.text, /[\r\n\t]| {5}/, 'Meta no acepta saltos de línea ni más de cuatro espacios en variables');
     }
 
-    await whatsapp.sendOrderNotice({ id: 19, status: 'APROBADO', name: 'Cliente de prueba', total: 10000, pickup_date: '2026-11-25', pickup_hour: 8, items: [{ color: 'ROJOS', grade: 'NACIONAL', bunches: 1 }] });
+    await whatsapp.sendOrderNotice({ id: 19, status: 'APROBADO', revision: 2, name: 'Cliente de prueba', total: 10000, pickup_date: '2026-11-25', pickup_hour: 8, items: [{ color: 'ROJOS', grade: 'NACIONAL', bunches: 1 }] });
     assert.equal(sent[3].template.name, 'aviso_anterior');
     assert.equal(sent[3].template.components.length, 1, 'el aviso aprobado no debe llevar botones para decidir otra vez');
+    assert.equal(sent[3].template.components[0].parameters[0].text, '19 (actualización 2)');
+
+    await whatsapp.sendCustomerApproval({ id: 19, revision: 2, name: 'Cliente de prueba', phone: '3123272558', total: 24000, pickup_date: '2026-11-25', pickup_hour: 8, items: [{ color: 'ROJOS', grade: 'NACIONAL', bunches: 2 }] });
+    assert.equal(sent[4].template.components[0].parameters[1].text, '19 (actualización 2)');
+    assert.equal(sent[4].template.components[0].parameters[4].text, '24.000');
 
     delete process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN;
     delete process.env.WHATSAPP_APP_SECRET;

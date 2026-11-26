@@ -130,7 +130,7 @@ async function sendOrderNotice(order) {
   const buttons = approval ? [{ type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: decisionPayload(order.id, 'APROBADO', approval.appSecret) }] }] : [];
   if (approval?.decisionTemplate) buttons.push({ type: 'button', sub_type: 'quick_reply', index: '1', parameters: [{ type: 'payload', payload: decisionPayload(order.id, 'RECHAZADO', approval.appSecret) }] });
   return sendTemplate(settings, adminPhone, approval?.decisionTemplate || approval?.approvalTemplate || settings.template, [
-    order.id, `*${order.name}*`, detail,
+    Number(order.revision) > 1 ? `${order.id} (actualización ${order.revision})` : order.id, `*${order.name}*`, detail,
     new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 }).format(Number(order.total)), reviewUrl
   ], buttons);
 }
@@ -159,7 +159,7 @@ async function sendCustomerApproval(order) {
   if (!settings) throw new Error('La confirmación automática de WhatsApp no está configurada.');
   const pickup = order.pickup_date ? `${String(order.pickup_date).slice(0, 10)} a las ${String(order.pickup_hour).padStart(2, '0')}:00` : 'Por coordinar';
   return sendTemplate(settings, customerPhone(order.phone), settings.customerTemplate, [
-    order.name, order.id, pickup, formatOrderItems(order.items), new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 }).format(Number(order.total))
+    order.name, Number(order.revision) > 1 ? `${order.id} (actualización ${order.revision})` : order.id, pickup, formatOrderItems(order.items), new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 }).format(Number(order.total))
   ]);
 }
 

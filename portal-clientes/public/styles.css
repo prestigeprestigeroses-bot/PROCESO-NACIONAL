@@ -48,3 +48,5 @@ body{background:#f0f8f1}.top{background:#246548}.hero{background:linear-gradient
 .order-success #order-success-summary{font-size:19px;font-weight:800;color:#1e5036}
 .order-success .primary{width:100%;margin-top:18px}
 @media(max-width:600px){.order-day summary{padding:14px;align-items:flex-start}.order-day .day-count{max-width:120px}.order-day>.orders{padding:0 8px 8px}.order-success{padding:28px 20px}}
+.matrix-scroll-hint{display:none}
+@media(max-width:740px){.matrix-scroll-hint{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 9px;padding:10px 13px;border:1px solid #abd4b8;border-radius:12px;background:#e1f2e7;color:#195d3a;font-size:13px;font-weight:700;line-height:1.35}.matrix-scroll-hint span{flex:none;font-size:24px;line-height:1}}

@@ -8,6 +8,7 @@ const express = require('express');
 const { Pool } = require('pg');
 const { listInventory } = require('./inventory');
 const { allocateReservations, applyReservations } = require('./reservations');
+const { planAdditions } = require('./order-amendment');
 const { buildInventoryOverview } = require('./inventory-overview');
 const whatsapp = require('./whatsapp');
 
@@ -134,7 +135,7 @@ async function processWhatsAppQueue() {
       try {
         await connection.query('BEGIN');
         const { rows } = await connection.query(`
-          SELECT order_id FROM portal_whatsapp_notifications
+          SELECT order_id,order_revision FROM portal_whatsapp_notifications
           WHERE status='PENDIENTE'
             OR (status IN ('ERROR','ENVIANDO') AND attempts < 10 AND updated_at < NOW() - INTERVAL '5 minutes')
           ORDER BY order_id LIMIT 1 FOR UPDATE SKIP LOCKED
@@ -146,13 +147,15 @@ async function processWhatsAppQueue() {
       finally { connection.release(); }
       if (!job) break;
       try {
-        const { rows } = await pool.query("SELECT o.id,o.status,o.total,to_char(o.pickup_date,'YYYY-MM-DD') AS pickup_date,o.pickup_hour,c.name FROM portal_orders o JOIN portal_customers c ON c.id=o.customer_id WHERE o.id=$1 AND o.status IN ('PENDIENTE','APROBADO')", [job.order_id]);
-        if (!rows[0]) { await pool.query("UPDATE portal_whatsapp_notifications SET status='CANCELADO',updated_at=NOW() WHERE order_id=$1", [job.order_id]); continue; }
-        const { rows: items } = await pool.query('SELECT color,grade,bunches FROM portal_order_items WHERE order_id=$1 ORDER BY id', [job.order_id]);
-        const messageId = await whatsapp.sendOrderNotice({ ...rows[0], items });
-        await pool.query("UPDATE portal_whatsapp_notifications SET status='SOLICITADO',message_id=$2,last_error='',updated_at=NOW() WHERE order_id=$1", [job.order_id, messageId]);
+        const { rows } = await pool.query(`SELECT o.id,o.status,o.total,o.revision,to_char(o.pickup_date,'YYYY-MM-DD') AS pickup_date,o.pickup_hour,c.name,
+          COALESCE(json_agg(json_build_object('color',i.color,'grade',i.grade,'bunches',i.bunches) ORDER BY i.id) FILTER (WHERE i.id IS NOT NULL),'[]') AS items
+          FROM portal_orders o JOIN portal_customers c ON c.id=o.customer_id LEFT JOIN portal_order_items i ON i.order_id=o.id
+          WHERE o.id=$1 AND o.revision=$2 AND o.status IN ('PENDIENTE','APROBADO') GROUP BY o.id,c.id`, [job.order_id, job.order_revision]);
+        if (!rows[0]) { await pool.query("UPDATE portal_whatsapp_notifications SET status='CANCELADO',updated_at=NOW() WHERE order_id=$1 AND order_revision=$2", [job.order_id, job.order_revision]); continue; }
+        const messageId = await whatsapp.sendOrderNotice(rows[0]);
+        await pool.query("UPDATE portal_whatsapp_notifications SET status='SOLICITADO',message_id=$2,last_error='',updated_at=NOW() WHERE order_id=$1 AND order_revision=$3 AND status='ENVIANDO'", [job.order_id, messageId, job.order_revision]);
       } catch (error) {
-        await pool.query("UPDATE portal_whatsapp_notifications SET status='ERROR',last_error=$2,updated_at=NOW() WHERE order_id=$1", [job.order_id, String(error.message || error).slice(0, 300)]);
+        await pool.query("UPDATE portal_whatsapp_notifications SET status='ERROR',last_error=$2,updated_at=NOW() WHERE order_id=$1 AND order_revision=$3 AND status='ENVIANDO'", [job.order_id, String(error.message || error).slice(0, 300), job.order_revision]);
         console.error('No se pudo solicitar el aviso de WhatsApp para el pedido', job.order_id);
       }
     }
@@ -169,7 +172,7 @@ async function processCustomerWhatsAppQueue() {
       try {
         await connection.query('BEGIN');
         const { rows } = await connection.query(`
-          SELECT order_id FROM portal_customer_notifications
+          SELECT order_id,order_revision FROM portal_customer_notifications
           WHERE status='PENDIENTE'
             OR (status IN ('ERROR','ENVIANDO') AND attempts < 10 AND updated_at < NOW() - INTERVAL '5 minutes')
           ORDER BY order_id LIMIT 1 FOR UPDATE SKIP LOCKED
@@ -181,13 +184,15 @@ async function processCustomerWhatsAppQueue() {
       finally { connection.release(); }
       if (!job) break;
       try {
-        const { rows } = await pool.query("SELECT o.id,o.total,to_char(o.pickup_date,'YYYY-MM-DD') AS pickup_date,o.pickup_hour,c.name,c.phone FROM portal_orders o JOIN portal_customers c ON c.id=o.customer_id WHERE o.id=$1 AND o.status='APROBADO'", [job.order_id]);
-        if (!rows[0]) { await pool.query("UPDATE portal_customer_notifications SET status='CANCELADO',updated_at=NOW() WHERE order_id=$1", [job.order_id]); continue; }
-        const { rows: items } = await pool.query('SELECT color,grade,bunches FROM portal_order_items WHERE order_id=$1 ORDER BY id', [job.order_id]);
-        const messageId = await whatsapp.sendCustomerApproval({ ...rows[0], items });
-        await pool.query("UPDATE portal_customer_notifications SET status='SOLICITADO',message_id=$2,last_error='',updated_at=NOW() WHERE order_id=$1", [job.order_id, messageId]);
+        const { rows } = await pool.query(`SELECT o.id,o.total,o.revision,to_char(o.pickup_date,'YYYY-MM-DD') AS pickup_date,o.pickup_hour,c.name,c.phone,
+          COALESCE(json_agg(json_build_object('color',i.color,'grade',i.grade,'bunches',i.bunches) ORDER BY i.id) FILTER (WHERE i.id IS NOT NULL),'[]') AS items
+          FROM portal_orders o JOIN portal_customers c ON c.id=o.customer_id LEFT JOIN portal_order_items i ON i.order_id=o.id
+          WHERE o.id=$1 AND o.revision=$2 AND o.status='APROBADO' GROUP BY o.id,c.id`, [job.order_id, job.order_revision]);
+        if (!rows[0]) { await pool.query("UPDATE portal_customer_notifications SET status='CANCELADO',updated_at=NOW() WHERE order_id=$1 AND order_revision=$2", [job.order_id, job.order_revision]); continue; }
+        const messageId = await whatsapp.sendCustomerApproval(rows[0]);
+        await pool.query("UPDATE portal_customer_notifications SET status='SOLICITADO',message_id=$2,last_error='',updated_at=NOW() WHERE order_id=$1 AND order_revision=$3 AND status='ENVIANDO'", [job.order_id, messageId, job.order_revision]);
       } catch (error) {
-        await pool.query("UPDATE portal_customer_notifications SET status='ERROR',last_error=$2,updated_at=NOW() WHERE order_id=$1", [job.order_id, String(error.message || error).slice(0, 300)]);
+        await pool.query("UPDATE portal_customer_notifications SET status='ERROR',last_error=$2,updated_at=NOW() WHERE order_id=$1 AND order_revision=$3 AND status='ENVIANDO'", [job.order_id, String(error.message || error).slice(0, 300), job.order_revision]);
         console.error('No se pudo solicitar la confirmación para el pedido', job.order_id);
       }
     }
@@ -234,9 +239,23 @@ async function init() {
       message_id TEXT,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS portal_order_amendments (
+      id BIGSERIAL PRIMARY KEY,
+      order_id BIGINT NOT NULL REFERENCES portal_orders(id) ON DELETE CASCADE,
+      revision INTEGER NOT NULL,
+      added_items JSONB NOT NULL,
+      added_total NUMERIC(14,2) NOT NULL,
+      added_notes TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
   `);
   await pool.query('ALTER TABLE portal_orders ADD COLUMN IF NOT EXISTS pickup_date DATE');
   await pool.query('ALTER TABLE portal_orders ADD COLUMN IF NOT EXISTS pickup_hour SMALLINT');
+  await pool.query('ALTER TABLE portal_orders ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 1');
+  await pool.query('ALTER TABLE portal_orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()');
+  await pool.query('ALTER TABLE portal_orders ADD COLUMN IF NOT EXISTS modifications_locked BOOLEAN NOT NULL DEFAULT FALSE');
+  await pool.query('ALTER TABLE portal_whatsapp_notifications ADD COLUMN IF NOT EXISTS order_revision INTEGER NOT NULL DEFAULT 1');
+  await pool.query('ALTER TABLE portal_customer_notifications ADD COLUMN IF NOT EXISTS order_revision INTEGER NOT NULL DEFAULT 1');
   await pool.query('ALTER TABLE portal_customers ADD COLUMN IF NOT EXISTS login_identifier VARCHAR(30)');
   await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS portal_customers_login_identifier_unique ON portal_customers (LOWER(login_identifier)) WHERE login_identifier IS NOT NULL');
   const count = await pool.query('SELECT COUNT(*)::int AS n FROM portal_prices');
@@ -298,29 +317,51 @@ app.post('/api/orders', auth('customer'), async (req, res) => {
     if (pickupDate < `${todayParts.year}-${todayParts.month}-${todayParts.day}`) throw new Error('El día de recogida no puede estar en el pasado.');
     await client.query('BEGIN');
     await client.query("SELECT pg_advisory_xact_lock(hashtext('portal-orders'))");
+    const { rows: matchingOrders } = await client.query("SELECT id,total,notes,pickup_hour,revision,modifications_locked FROM portal_orders WHERE customer_id=$1 AND pickup_date=$2::date AND status='APROBADO' ORDER BY id LIMIT 1 FOR UPDATE", [req.session.id, pickupDate]);
+    const existing = matchingOrders[0] || null;
+    if (existing?.modifications_locked) { const error = new Error(`El pedido #${existing.id} ya está en preparación. No se pueden agregar productos para ese día.`); error.code = 'ORDER_LOCKED'; throw error; }
     const catalog = await availability(client); const p = await prices();
-    const requested = new Map(); let total = 0;
+    const requested = new Map();
     for (const item of items) {
       const color = norm(item.color), grade = norm(item.grade), bunches = Number(item.bunches);
       if (!colors.includes(color) || !grades.includes(grade) || (grade === 'EUCALIPTO') !== (color === 'EUCALIPTO') || !Number.isSafeInteger(bunches) || bunches < 1 || bunches > 10000) throw new Error('Cantidad o producto no válido.');
       const key = `${color}|${grade}`; requested.set(key, (requested.get(key) || 0) + bunches);
-      total += bunches * p[grade];
     }
     const requestedItems = [...requested].map(([key, bunches]) => {
       const [color, grade] = key.split('|'); return { color, grade, bunches };
     });
     const allocations = allocateReservations(catalog, requestedItems, assortedColors);
-    const order = await client.query("INSERT INTO portal_orders(customer_id,status,total,notes,pickup_date,pickup_hour,decided_at) VALUES($1,'APROBADO',$2,$3,$4,$5,NOW()) RETURNING id", [req.session.id, total, String(req.body.notes || '').trim().slice(0, 1000), pickupDate, pickupHour]);
-    for (const [key, bunches] of requested) { const [color, grade] = key.split('|'); await client.query('INSERT INTO portal_order_items(order_id,color,grade,bunches,price_per_bunch,subtotal) VALUES($1,$2,$3,$4,$5,$6)', [order.rows[0].id, color, grade, bunches, p[grade], bunches * p[grade]]); }
-    for (const item of allocations) await client.query('INSERT INTO portal_inventory_reservations(order_id,color,grade,bunches) VALUES($1,$2,$3,$4)', [order.rows[0].id, item.color, item.grade, item.bunches]);
-    await client.query('INSERT INTO portal_whatsapp_notifications(order_id) VALUES($1)', [order.rows[0].id]);
-    await client.query('INSERT INTO portal_customer_notifications(order_id) VALUES($1)', [order.rows[0].id]);
+    const previousItems = existing ? (await client.query('SELECT id,color,grade,price_per_bunch FROM portal_order_items WHERE order_id=$1 ORDER BY id', [existing.id])).rows : [];
+    const { additions, previousByKey, addedTotal } = planAdditions(requested, previousItems, p);
+    const addedNotes = String(req.body.notes || '').trim().slice(0, 1000);
+    let orderId, revision, total, orderHour;
+    if (existing) {
+      orderId = existing.id; revision = Number(existing.revision) + 1;
+      total = Number(existing.total) + addedTotal;
+      orderHour = Number(existing.pickup_hour);
+      const notes = addedNotes ? [existing.notes, addedNotes].filter(Boolean).join('\n').slice(-1000) : existing.notes;
+      await client.query('UPDATE portal_orders SET total=$1,notes=$2,revision=$3,updated_at=NOW() WHERE id=$4', [total, notes, revision, orderId]);
+    } else {
+      total = addedTotal; revision = 1; orderHour = pickupHour;
+      const order = await client.query("INSERT INTO portal_orders(customer_id,status,total,notes,pickup_date,pickup_hour,decided_at) VALUES($1,'APROBADO',$2,$3,$4,$5,NOW()) RETURNING id", [req.session.id, total, addedNotes, pickupDate, pickupHour]);
+      orderId = order.rows[0].id;
+    }
+    for (const item of additions) {
+      const previous = previousByKey.get(`${item.color}|${item.grade}`);
+      if (previous) await client.query('UPDATE portal_order_items SET bunches=bunches+$1,subtotal=subtotal+$2 WHERE id=$3', [item.bunches, item.subtotal, previous.id]);
+      else await client.query('INSERT INTO portal_order_items(order_id,color,grade,bunches,price_per_bunch,subtotal) VALUES($1,$2,$3,$4,$5,$6)', [orderId, item.color, item.grade, item.bunches, item.price, item.subtotal]);
+    }
+    for (const item of allocations) await client.query('INSERT INTO portal_inventory_reservations(order_id,color,grade,bunches) VALUES($1,$2,$3,$4)', [orderId, item.color, item.grade, item.bunches]);
+    if (existing) await client.query('INSERT INTO portal_order_amendments(order_id,revision,added_items,added_total,added_notes) VALUES($1,$2,$3,$4,$5)', [orderId, revision, JSON.stringify(additions), addedTotal, addedNotes]);
+    for (const table of ['portal_whatsapp_notifications', 'portal_customer_notifications']) {
+      await client.query(`INSERT INTO ${table}(order_id,order_revision) VALUES($1,$2) ON CONFLICT (order_id) DO UPDATE SET order_revision=$2,status='PENDIENTE',attempts=0,last_error='',message_id=NULL,updated_at=NOW()`, [orderId, revision]);
+    }
     await client.query('COMMIT');
-    res.status(201).json({ id: order.rows[0].id, total, status: 'APROBADO' });
+    res.status(existing ? 200 : 201).json({ id: orderId, total, status: 'APROBADO', updated: Boolean(existing), revision, pickupHour: orderHour });
     broadcastCatalogChanged();
     void processWhatsAppQueue();
     void processCustomerWhatsAppQueue();
-  } catch (e) { await client.query('ROLLBACK'); fail(res, e, e.code === 'INSUFFICIENT_INVENTORY' ? 409 : 400); } finally { client.release(); }
+  } catch (e) { await client.query('ROLLBACK'); fail(res, e, ['INSUFFICIENT_INVENTORY', 'ORDER_LOCKED'].includes(e.code) ? 409 : 400); } finally { client.release(); }
 });
 app.get('/api/admin', auth('admin'), async (_req, res) => {
   try {
@@ -400,6 +441,15 @@ app.delete('/api/admin/customers/:id', auth('admin'), async (req, res) => {
 });
 app.put('/api/admin/prices', auth('admin'), async (req, res) => {
   try { for (const grade of grades) { const value = Number(req.body[grade]); if (!Number.isSafeInteger(value) || value < 1 || value > 100000000) throw new Error(`Precio inválido para ${grade}.`); } for (const grade of grades) await pool.query('UPDATE portal_prices SET price_per_bunch=$1,updated_at=NOW() WHERE grade=$2', [req.body[grade], grade]); broadcastCatalogChanged(); res.json({ prices: await prices() }); } catch (e) { fail(res, e); }
+});
+app.post('/api/admin/orders/:id/modifications', auth('admin'), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id < 1 || typeof req.body.locked !== 'boolean') return res.status(400).json({ error: 'Pedido o acción no válidos.' });
+  try {
+    const { rows } = await pool.query("UPDATE portal_orders SET modifications_locked=$1 WHERE id=$2 AND status='APROBADO' RETURNING id,modifications_locked", [req.body.locked, id]);
+    if (!rows[0]) return res.status(404).json({ error: 'Pedido aprobado no encontrado.' });
+    res.json(rows[0]);
+  } catch (error) { fail(res, error, 500); }
 });
 app.delete('/api/admin/orders/:id', auth('admin'), async (req, res) => {
   const id = Number(req.params.id);
