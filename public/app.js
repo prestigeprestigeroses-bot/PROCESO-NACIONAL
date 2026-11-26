@@ -55,6 +55,7 @@ function renderInventorySyncStatus() {
 }
 
 let shortageFingerprint = '';
+const shortageGradeNames = { NACIONAL: 'Nacional bonchado', BAJAS: 'Bajas bonchadas', 'NACIONAL GRANEL': 'Nacional granel', 'BAJAS GRANEL': 'Bajas granel' };
 async function refreshPortalShortages() {
   const result = await api('/api/inventory/portal-shortages', { cache: 'no-store' });
   const shortages = result.enabled ? result.shortages : [];
@@ -68,7 +69,7 @@ async function refreshPortalShortages() {
   $('#portal-shortage-total').textContent = `${bunchLabel(total)} por ingresar · ${shortages.length} ${shortages.length === 1 ? 'categoría' : 'categorías'}`;
   $('#portal-shortage-list').innerHTML = shortages.map(item => {
     const orders = item.orders.map(order => `#${Number(order.id)} ${escapeHtml(order.name)} (${escapeHtml(order.pickupDate)})`).join(', ');
-    return `<li><strong>${escapeHtml(item.color)} · ${escapeHtml(item.grade)}</strong><span>Faltan ${bunchLabel(item.shortage)} · Físico ${number(item.physical)} / Apartado ${number(item.reserved)}</span><small>Pedidos: ${orders}</small></li>`;
+    return `<li><strong>${escapeHtml(item.color)} · ${escapeHtml(shortageGradeNames[item.grade] || item.grade)}</strong><span>Faltan ${bunchLabel(item.shortage)} · Físico ${number(item.physical)} / Apartado ${number(item.reserved)}</span><small>Pedidos: ${orders}</small></li>`;
   }).join('');
 }
 
