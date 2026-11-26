@@ -147,6 +147,11 @@
                     <label>NIT / Documento<input name="clientDocument" placeholder="900.000.000-1"></label>
                     <label>Entregado por *<input name="deliveredBy" placeholder="Nombre de quien realiza la entrega" required></label>
                   </div>
+                  <div class="linked-portal-order">
+                    <label for="portal-order-id">Pedido del portal (opcional)</label>
+                    <select id="portal-order-id" name="portalOrderId"><option value="">Sin pedido del portal</option></select>
+                    <p id="linked-order-summary">Selecciona el pedido para cerrarlo y liberar su reserva al finalizar esta remisión.</p>
+                  </div>
                 </article>
                 <article class="panel form-panel">
                   <div class="panel-title"><span>02</span><div><h3>Variedades y grados</h3><p>El precio se toma automáticamente de la lista configurada para este cliente.</p></div></div>

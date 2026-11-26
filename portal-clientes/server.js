@@ -417,8 +417,11 @@ app.delete('/api/admin/customers/:id', auth('admin'), async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('portal-orders'))");
     const found = await client.query('SELECT id FROM portal_customers WHERE id=$1 FOR UPDATE', [id]);
     if (!found.rowCount) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Cliente no encontrado.' }); }
+    const shipped = await client.query("SELECT id FROM portal_orders WHERE customer_id=$1 AND status='DESPACHADO' LIMIT 1", [id]);
+    if (shipped.rowCount) { await client.query('ROLLBACK'); return res.status(409).json({ error: 'Este cliente tiene un pedido vinculado a una remisión. Anule primero esa remisión.' }); }
     await client.query('DELETE FROM portal_order_items WHERE order_id IN (SELECT id FROM portal_orders WHERE customer_id=$1)', [id]);
     await client.query('DELETE FROM portal_orders WHERE customer_id=$1', [id]);
     await client.query('DELETE FROM portal_customers WHERE id=$1', [id]);
@@ -445,8 +448,10 @@ app.delete('/api/admin/orders/:id', auth('admin'), async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const found = await client.query('SELECT id FROM portal_orders WHERE id=$1 FOR UPDATE', [id]);
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('portal-orders'))");
+    const found = await client.query('SELECT id,status FROM portal_orders WHERE id=$1 FOR UPDATE', [id]);
     if (!found.rowCount) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Pedido no encontrado.' }); }
+    if (found.rows[0].status === 'DESPACHADO') { await client.query('ROLLBACK'); return res.status(409).json({ error: 'Este pedido está vinculado a una remisión. Anule primero la remisión.' }); }
     await client.query('DELETE FROM portal_order_items WHERE order_id=$1', [id]);
     await client.query('DELETE FROM portal_orders WHERE id=$1', [id]);
     await client.query('COMMIT');

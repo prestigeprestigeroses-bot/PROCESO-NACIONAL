@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { Pool } = require('pg');
+const { missingOrderItems } = require('./portal-order-fulfillment');
 
 const usePostgres = Boolean(process.env.DATABASE_URL);
 const dataDirectory = path.join(process.cwd(), '.data');
@@ -265,6 +266,7 @@ async function init() {
     ALTER TABLE remissions ADD COLUMN IF NOT EXISTS finalized_at TIMESTAMPTZ;
     ALTER TABLE remissions ADD COLUMN IF NOT EXISTS cancellation_reason TEXT NOT NULL DEFAULT '';
     ALTER TABLE remissions ADD COLUMN IF NOT EXISTS canceled_at TIMESTAMPTZ;
+    ALTER TABLE remissions ADD COLUMN IF NOT EXISTS portal_order_id BIGINT;
     UPDATE remissions r SET
       requested_bunches = totals.bunches,
       requested_stems = totals.stems,
@@ -275,6 +277,7 @@ async function init() {
     ) totals
     WHERE r.id = totals.remission_id AND r.requested_bunches = 0;
     CREATE INDEX IF NOT EXISTS idx_remissions_created_at ON remissions(created_at DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_remissions_active_portal_order ON remissions(portal_order_id) WHERE portal_order_id IS NOT NULL AND status <> 'ANULADA';
     CREATE INDEX IF NOT EXISTS idx_remission_items_source ON remission_items(source_date,variety,grade_cm,stems_per_bunch);
     CREATE INDEX IF NOT EXISTS idx_price_lists_lookup ON price_lists(client_key,variety,grade_cm);
     CREATE INDEX IF NOT EXISTS idx_export_transfer_items_source ON export_transfer_items(source_date,variety,stems_per_bunch);
@@ -315,6 +318,7 @@ function mapRemission(row, items = []) {
     id: Number(row.id),
     remissionNumber: row.remission_number !== undefined ? row.remission_number : (row.remissionNumber ?? null),
     originalRemissionNumber: row.original_remission_number ?? row.originalRemissionNumber ?? null,
+    portalOrderId: row.portal_order_id == null ? (row.portalOrderId ?? null) : Number(row.portal_order_id),
     clientName: row.client_name ?? row.clientName,
     clientDocument: row.client_document ?? row.clientDocument,
     clientPhone: row.client_phone ?? row.clientPhone,
@@ -796,7 +800,10 @@ function bunchText(value) {
 
 async function createRemission(input) {
   const { details, items } = cleanRemissionInput(input);
+  const portalOrderId = input.portalOrderId === '' || input.portalOrderId == null ? null : Number(input.portalOrderId);
+  if (portalOrderId !== null && (!Number.isSafeInteger(portalOrderId) || portalOrderId < 1)) throw new Error('Seleccione un número de pedido válido.');
   if (!usePostgres) {
+    if (portalOrderId !== null) throw new Error('Para vincular un pedido, la remisión y el portal deben usar la misma base PostgreSQL.');
     const selected = items.map(requested => {
       if (requested.type === 'eucalyptus') return { stock: null, requested, decoded: { variety: 'EUCALIPTO', gradeCm: 'HOJA', stemsPerBunch: 0, sourceDate: null } };
       if (requested.type === 'export') return { stock: null, requested, decoded: { variety: requested.variety, gradeCm: requested.gradeCm, stemsPerBunch: requested.stemsPerBunch, sourceDate: null } };
@@ -838,6 +845,19 @@ async function createRemission(input) {
   try {
     await client.query('BEGIN');
     await client.query('LOCK TABLE remissions IN EXCLUSIVE MODE');
+    let portalOrder = null;
+    let portalOrderItems = [];
+    if (portalOrderId !== null) {
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('portal-orders'))");
+      const result = await client.query(`SELECT o.id,o.status,c.name FROM portal_orders o
+        JOIN portal_customers c ON c.id=o.customer_id WHERE o.id=$1 FOR UPDATE OF o`, [portalOrderId]);
+      portalOrder = result.rows[0];
+      if (!portalOrder || portalOrder.status !== 'APROBADO') throw new Error('El pedido seleccionado no existe o ya fue terminado. Actualice la lista.');
+      if (normalizedText(details.clientName) !== normalizedText(portalOrder.name)) throw new Error(`El cliente de la remisión debe ser ${portalOrder.name}, como en el pedido #${portalOrderId}.`);
+      const orderItems = await client.query('SELECT color,grade,bunches FROM portal_order_items WHERE order_id=$1 ORDER BY id', [portalOrderId]);
+      portalOrderItems = orderItems.rows;
+      if (!portalOrderItems.length) throw new Error('El pedido seleccionado no tiene productos.');
+    }
     const detailRows = [];
     const selectedInThisRemission = new Map();
     for (const requested of items) {
@@ -863,15 +883,19 @@ async function createRemission(input) {
     const requestedBunches = detailRows.reduce((sum, row) => sum + row.bunches, 0);
     const requestedStems = detailRows.reduce((sum, row) => sum + row.stems, 0);
     const total = detailRows.reduce((sum, row) => sum + row.subtotal, 0);
+    if (portalOrder) {
+      const missing = missingOrderItems(portalOrderItems, detailRows);
+      if (missing.length) throw new Error(`La remisión no cubre el pedido #${portalOrderId}. Faltan: ${missing.join('; ')}.`);
+    }
     const sequenceResult = await client.query("SELECT nextval(pg_get_serial_sequence('remissions','id')) AS id");
     const id = Number(sequenceResult.rows[0].id);
     const businessYear = Number(businessToday().slice(0, 4));
     const numberResult = await client.query("SELECT COUNT(*)::int AS count FROM remissions WHERE status='FINALIZADA' AND EXTRACT(YEAR FROM created_at AT TIME ZONE $1)::int=$2", [businessTimeZone, businessYear]);
     const remissionNumber = `REM-${businessYear}-${String(Number(numberResult.rows[0].count) + 1).padStart(5, '0')}`;
     const header = await client.query(
-      `INSERT INTO remissions (id,remission_number,client_name,client_document,client_phone,destination,delivered_by,notes,total,status,requested_bunches,requested_stems,finalized_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'FINALIZADA',$10,$11,NOW()) RETURNING *`,
-      [id, remissionNumber, details.clientName, details.clientDocument, details.clientPhone, details.destination, details.deliveredBy, details.notes, total, requestedBunches, requestedStems]
+      `INSERT INTO remissions (id,remission_number,client_name,client_document,client_phone,destination,delivered_by,notes,total,status,requested_bunches,requested_stems,portal_order_id,finalized_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'FINALIZADA',$10,$11,$12,NOW()) RETURNING *`,
+      [id, remissionNumber, details.clientName, details.clientDocument, details.clientPhone, details.destination, details.deliveredBy, details.notes, total, requestedBunches, requestedStems, portalOrderId]
     );
     const savedItems = [];
     for (const row of detailRows) {
@@ -882,9 +906,14 @@ async function createRemission(input) {
       );
       savedItems.push(saved.rows[0]);
     }
+    if (portalOrder) await client.query("UPDATE portal_orders SET status='DESPACHADO',updated_at=NOW() WHERE id=$1", [portalOrderId]);
     await client.query('COMMIT');
     return mapRemission(header.rows[0], savedItems.map(mapRemissionItem));
-  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  } catch (error) {
+    await client.query('ROLLBACK');
+    if (error.constraint === 'idx_remissions_active_portal_order') throw new Error('Este pedido ya está vinculado a otra remisión activa.');
+    throw error;
+  }
   finally { client.release(); }
 }
 
@@ -1010,6 +1039,11 @@ async function cancelRemission(id, input) {
     if (!result.rows[0]) {
       const exists = await connection.query('SELECT status FROM remissions WHERE id=$1', [id]);
       throw new Error(exists.rows[0] ? 'Esta remisión ya está anulada.' : 'Remisión no encontrada.');
+    }
+    if (result.rows[0].portal_order_id != null) {
+      await connection.query("SELECT pg_advisory_xact_lock(hashtext('portal-orders'))");
+      const reopened = await connection.query("UPDATE portal_orders SET status='APROBADO',updated_at=NOW() WHERE id=$1 AND status='DESPACHADO' RETURNING id", [result.rows[0].portal_order_id]);
+      if (!reopened.rowCount) throw new Error('No se pudo reabrir el pedido del portal vinculado. Revise su estado antes de anular la remisión.');
     }
     await renumberRemissions(connection);
     await connection.query('COMMIT');

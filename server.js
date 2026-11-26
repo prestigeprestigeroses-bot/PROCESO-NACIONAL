@@ -196,7 +196,7 @@ app.use((_request, response) => response.sendFile(path.join(__dirname, 'public',
 
 app.use((error, _request, response, _next) => {
   console.error(error);
-  const known = /obligatori|insuficiente|suficientes|negativ|no encontr|repetida|no es válida|no válido|cantidad válida|conteo válido|inventario cambió|coincide con el sistema|seleccione una variedad|ingrese el responsable|ingrese el motivo|precio por ramo|precio por tallo|precio mayor que cero|precio configurado|quedan|pendiente|exactamente|superar|asignadas|bloqueada|desbloquear|anulada|anulación/i.test(error.message);
+  const known = /obligatori|insuficiente|suficientes|negativ|no encontr|repetida|no es válida|no válido|cantidad válida|conteo válido|inventario cambió|coincide con el sistema|seleccione una variedad|ingrese el responsable|ingrese el motivo|precio por ramo|precio por tallo|precio mayor que cero|precio configurado|quedan|pendiente|exactamente|superar|asignadas|bloqueada|desbloquear|anulada|anulación|pedido seleccionado|pedido válido|pedido #|cliente de la remisión|vincular un pedido|reabrir el pedido|pedido ya está vinculado/i.test(error.message);
   response.status(known ? 400 : 500).json({ error: known ? error.message : 'No fue posible completar la operación.' });
 });
 

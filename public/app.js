@@ -1,5 +1,5 @@
 const varieties = ['FREEDOM', 'PINK FLOYD', 'MONDIAL', 'HUMMER', 'MOMENTUM', 'CORAL REEF', 'QUICK SAND', 'HILUX', 'CANDLELIGHT', 'DEEP PURPLE', 'SUMMERSAND', 'STAR PLATINUM', 'SHIMMER', 'PINK OHARA', 'WHITE OHARA', 'PINK MONDIAL', 'BLESSING', 'PINK AMARETO', 'TIFFANY', 'YELLOW BIKINI', 'QUEEN BERRY', 'MOODY BLUE', 'SWAN', 'HIGH MAGIC', 'EXPLORER', 'DANCING RED', 'VENDELA'];
-const state = { inventory: [], inventoryFingerprint: '', inventoryRefreshPromise: null, inventoryLastSyncedAt: null, inventorySyncError: '', refreshVersion: 0, reconciliationSources: [], adjustments: [], remissions: [], historyRows: [], historyHasMore: false, historyVersion: 0, historyLoading: false, prices: [], transfers: [], gradeTransfers: [], waste: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), selectedPriceGrades: new Map(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], wasteReport: [], movementsReport: { adjustments: [], transfers: [], gradeTransfers: [] }, inventoryReport: null, reportRange: '', stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
+const state = { inventory: [], inventoryFingerprint: '', inventoryRefreshPromise: null, inventoryLastSyncedAt: null, inventorySyncError: '', refreshVersion: 0, reconciliationSources: [], adjustments: [], remissions: [], portalOrders: [], historyRows: [], historyHasMore: false, historyVersion: 0, historyLoading: false, prices: [], transfers: [], gradeTransfers: [], waste: [], priceDrafts: [], editingPriceClientKey: null, expandedPriceClients: new Set(), selectedPriceGrades: new Map(), lines: [], activeRemission: null, editingDocumentPrices: false, reportsUnlocked: false, reportRows: [], wasteReport: [], movementsReport: { adjustments: [], transfers: [], gradeTransfers: [] }, inventoryReport: null, reportRange: '', stepGrade: 'ALL', config: {}, totals: {}, activeView: 'dashboard', selectedDate: '', selectedGrade: 'ALL' };
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const money = value => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', currencyDisplay: 'code', maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -35,7 +35,7 @@ async function refreshAll() {
   const fresh = { cache: 'no-store' };
   const inventoryRefresh = refreshInventory().catch(() => false);
   const shortageRefresh = refreshPortalShortages().catch(() => false);
-  const ordersRefresh = state.activeView === 'orders' ? refreshPortalOrders().catch(() => false) : Promise.resolve();
+  const ordersRefresh = ['orders', 'new-remission'].includes(state.activeView) ? refreshPortalOrders().catch(() => false) : Promise.resolve();
   const results = await Promise.allSettled([api('/api/dashboard', fresh), api('/api/config', fresh), api('/api/price-lists', fresh), api('/api/export-transfers', fresh), api('/api/inventory/reconciliation', fresh), api('/api/inventory/waste', fresh), api('/api/inventory/grade-transfers', fresh)]);
   await Promise.all([inventoryRefresh, shortageRefresh, ordersRefresh]);
   if (version !== state.refreshVersion) return;
@@ -74,6 +74,19 @@ async function refreshPortalShortages() {
 }
 
 let portalOrdersFingerprint = '';
+function renderPortalOrderPicker(enabled = true) {
+  const picker = $('#portal-order-id');
+  const selected = picker.value;
+  const approved = state.portalOrders.filter(order => order.status === 'APROBADO');
+  picker.replaceChildren(new Option('Sin pedido del portal', ''), ...approved.map(order => new Option(`#${order.id} · ${order.name} · ${order.pickupDate || 'Sin fecha'}`, String(order.id))));
+  if (selected && !approved.some(order => String(order.id) === selected)) picker.add(new Option(`#${selected} · ya no disponible`, selected));
+  picker.disabled = !enabled || (!approved.length && !selected);
+  if (selected) picker.value = selected;
+  const order = approved.find(item => String(item.id) === picker.value);
+  $('#linked-order-summary').textContent = order
+    ? `Pedido #${order.id} de ${order.name}: ${order.items.map(item => `${item.color} · ${portalGradeNames[item.grade] || item.grade}: ${item.bunches}`).join('; ')}. La remisión debe cubrir todo el pedido.`
+    : selected ? `El pedido #${selected} ya no está disponible. Selecciona otro antes de finalizar.` : enabled ? 'Selecciona un pedido para cerrarlo y liberar su reserva al finalizar esta remisión.' : 'Los pedidos estarán disponibles cuando ambos sistemas usen el mismo PostgreSQL.';
+}
 function portalOrderQuantities(order) {
   return order.items.reduce((totals, item) => {
     if (item.grade === 'EUCALIPTO') totals.stems += Number(item.bunches);
@@ -86,17 +99,21 @@ async function refreshPortalOrders() {
   const result = await api('/api/portal/orders', { cache: 'no-store' });
   if (!result.enabled) {
     status.textContent = 'Los pedidos estarán disponibles cuando este sistema y el portal usen el mismo PostgreSQL.';
+    state.portalOrders = [];
+    renderPortalOrderPicker(false);
     $('#portal-orders-list').replaceChildren();
     portalOrdersFingerprint = '';
     return;
   }
   const orders = result.orders;
+  state.portalOrders = orders;
   status.textContent = `${orders.length} ${orders.length === 1 ? 'pedido activo' : 'pedidos activos'} · se actualiza automáticamente`;
   const todayParts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Bogota', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()).map(part => [part.type, part.value]));
   const today = `${todayParts.year}-${todayParts.month}-${todayParts.day}`;
   const fingerprint = JSON.stringify([today, orders]);
   if (fingerprint === portalOrdersFingerprint) return;
   portalOrdersFingerprint = fingerprint;
+  renderPortalOrderPicker();
   const container = $('#portal-orders-list');
   const openDays = new Set([...container.querySelectorAll('details[open]')].map(day => day.dataset.date));
   const days = new Map();
@@ -125,7 +142,7 @@ async function refreshPortalOrders() {
       const products = [...byGrade].map(([grade, items]) => `<section class="portal-order-grade"><h4>${escapeHtml(portalGradeNames[grade] || grade)}</h4><ul>${items.map(item => `<li><span>${escapeHtml(item.color)}</span><strong>${number(item.bunches)} ${grade === 'EUCALIPTO' ? (Number(item.bunches) === 1 ? 'tallo' : 'tallos') : (Number(item.bunches) === 1 ? 'ramo' : 'ramos')}</strong></li>`).join('')}</ul></section>`).join('');
       const hour = order.pickupHour == null ? '' : ` · ${String(order.pickupHour).padStart(2, '0')}:00`;
       const quantities = portalOrderQuantities(order);
-      return `<article class="portal-order-card"><header><div><strong>Pedido #${number(order.id)} · ${escapeHtml(order.name)}</strong><small>${escapeHtml(order.phone)}${hour}</small></div><span class="portal-order-status">${escapeHtml(order.status)}</span></header><div class="portal-order-products">${products || '<p>Sin productos registrados.</p>'}</div><div class="portal-order-totals"><strong>${bunchLabel(quantities.bunches)}${quantities.stems ? ` · ${number(quantities.stems)} tallos de eucalipto` : ''}</strong><strong>Total estimado: ${money(order.total)}</strong></div></article>`;
+      return `<article class="portal-order-card"><header><div><strong>Pedido #${number(order.id)} · ${escapeHtml(order.name)}</strong><small>${escapeHtml(order.phone)}${hour}</small></div><span class="portal-order-status">${escapeHtml(order.status)}</span></header><div class="portal-order-products">${products || '<p>Sin productos registrados.</p>'}</div><div class="portal-order-totals"><strong>${bunchLabel(quantities.bunches)}${quantities.stems ? ` · ${number(quantities.stems)} tallos de eucalipto` : ''}</strong><strong>Total estimado: ${money(order.total)}</strong></div>${order.status === 'APROBADO' ? `<button class="button button--primary portal-order-remission" type="button" data-remit-order="${number(order.id)}">Crear remisión para este pedido</button>` : ''}</article>`;
     }).join('');
     return `<details class="portal-order-day ${todayClass}" data-date="${escapeHtml(date)}" ${openDays.has(date) || (!openDays.size && index === 0) ? 'open' : ''}><summary><strong>${date === today ? 'HOY · ' : ''}${escapeHtml(label)}</strong><span>${dayOrders.length} ${dayOrders.length === 1 ? 'pedido' : 'pedidos'} · ${dayQuantity} · ${money(dayTotals.price)}</span></summary><div class="portal-order-cards">${cards}</div></details>`;
   }).join('') || '<p class="portal-orders-empty">No hay pedidos pendientes ni aprobados.</p>';
@@ -505,7 +522,10 @@ function switchView(view) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
   if (view === 'history') loadFullHistory();
   if (view === 'orders') refreshPortalOrders().catch(error => { $('#portal-orders-status').textContent = `No se pudieron cargar los pedidos: ${error.message}`; });
-  if (view === 'new-remission') refreshRemissionInventory();
+  if (view === 'new-remission') {
+    refreshRemissionInventory();
+    refreshPortalOrders().catch(error => { $('#linked-order-summary').textContent = `No se pudieron cargar los pedidos: ${error.message}`; });
+  }
 }
 
 function reportGroups(rows) {
@@ -668,6 +688,7 @@ function toast(message) {
 
 function clearRemission() {
   $('#remission-form').reset();
+  renderPortalOrderPicker();
   $('#export-entry').open = false; $('#eucalyptus-entry').open = false;
   state.lines = []; state.stepGrade = 'ALL';
   $('#step-grade-filter').value = 'ALL';
@@ -728,7 +749,7 @@ function renderDocument(data) {
   documentElement.innerHTML = `
     ${data.status === 'ANULADA' ? '<div class="doc-canceled-mark">ANULADA</div>' : ''}
     <header class="doc-head"><div class="doc-brand"><span class="brand-logo brand-logo--document"><img src="/logo-prestige.jpeg" alt="Prestige Roses"></span><div><h2>${escapeHtml(company.companyName)}</h2><p>${escapeHtml(company.companyNit ? `NIT: ${company.companyNit}` : 'Salida nacional de flor')}</p></div></div><div class="doc-number"><span>REMISIÓN</span><strong>${data.status === 'ANULADA' ? 'ANULADA' : escapeHtml(data.remissionNumber || 'Pendiente')}</strong><p>${dateTime(data.createdAt)}</p></div></header>
-    <section class="doc-client"><div class="doc-field"><span>Cliente</span><strong>${escapeHtml(data.clientName)}</strong></div><div class="doc-field"><span>NIT / Documento</span><strong>${escapeHtml(data.clientDocument || '—')}</strong></div><div class="doc-field"><span>Entregado por</span><strong>${escapeHtml(data.deliveredBy || '—')}</strong></div></section>
+    <section class="doc-client"><div class="doc-field"><span>Cliente</span><strong>${escapeHtml(data.clientName)}</strong>${data.portalOrderId ? `<small>Pedido del portal #${number(data.portalOrderId)}</small>` : ''}</div><div class="doc-field"><span>NIT / Documento</span><strong>${escapeHtml(data.clientDocument || '—')}</strong></div><div class="doc-field"><span>Entregado por</span><strong>${escapeHtml(data.deliveredBy || '—')}</strong></div></section>
     <table class="doc-table"><thead><tr><th>Variedad</th><th>Grado</th><th>Tallos/ramo</th><th>Ramos</th><th>Total tallos</th><th>Precio / unidad</th><th>Subtotal</th></tr></thead><tbody>${displayItems.map(item => `<tr${item.isDonation ? ' class="doc-donation-row"' : ''}><td><strong>${escapeHtml(item.variety)}</strong>${item.isDonation ? '<br><span>DONACIÓN</span>' : ''}</td><td>${['40', '50', '60'].includes(item.gradeCm) ? `Exportación ${item.gradeCm} cm` : escapeHtml(item.gradeCm || '—')}</td><td>${item.gradeCm === 'HOJA' ? '—' : number(item.stemsPerBunch)}</td><td>${item.gradeCm === 'HOJA' ? '—' : number(item.bunches)}</td><td>${number(item.stems)}</td><td>${item.isDonation ? 'GRATIS' : state.editingDocumentPrices ? `<input class="doc-price-input" type="number" min="1" step="1" value="${Number(item.gradeCm === 'HOJA' ? item.unitPriceStem : item.unitPriceBunch)}" data-document-price="${item.ids.join(',')}" data-document-original-prices="${item.originalPrices.join(',')}" data-document-display-price="${Number(item.gradeCm === 'HOJA' ? item.unitPriceStem : item.unitPriceBunch)}" aria-label="Precio por ${item.gradeCm === 'HOJA' ? 'tallo' : 'ramo'} de ${escapeHtml(item.variety)}">` : `${money(item.gradeCm === 'HOJA' ? item.unitPriceStem : item.unitPriceBunch)} / ${item.gradeCm === 'HOJA' ? 'tallo' : 'ramo'}`}</td><td>${money(item.subtotal)}</td></tr>`).join('')}</tbody><tfoot><tr class="doc-table-totals"><td colspan="3"><strong>TOTALES</strong></td><td><strong>${number(totalBunches)} ramos</strong></td><td><strong>${number(totalStems)} tallos</strong></td><td></td><td><strong>${money(data.total)}</strong></td></tr></tfoot></table>
     <div class="doc-total"><span>TOTAL</span><span>${money(data.total)}</span></div>
     ${data.notes ? `<div class="doc-notes"><strong>Observaciones:</strong> ${escapeHtml(data.notes)}</div>` : ''}
@@ -872,6 +893,18 @@ $('#step-grade-filter').addEventListener('change', event => { state.stepGrade = 
 $('#refresh-remission-inventory').addEventListener('click', () => refreshRemissionInventory(true));
 $('#portal-shortage-remissions').addEventListener('click', () => switchView('orders'));
 $('#portal-orders-refresh').addEventListener('click', () => refreshPortalOrders().catch(error => { $('#portal-orders-status').textContent = `No se pudieron cargar los pedidos: ${error.message}`; }));
+$('#portal-order-id').addEventListener('change', () => {
+  renderPortalOrderPicker();
+  const order = state.portalOrders.find(item => String(item.id) === $('#portal-order-id').value);
+  if (order) $('#remission-client-name').value = order.name;
+});
+$('#portal-orders-list').addEventListener('click', event => {
+  const button = event.target.closest('[data-remit-order]');
+  if (!button) return;
+  switchView('new-remission');
+  $('#portal-order-id').value = button.dataset.remitOrder;
+  $('#portal-order-id').dispatchEvent(new Event('change'));
+});
 $('#line-variety').addEventListener('change', renderStockPreview);
 $('#remission-client-name').addEventListener('input', renderStockPreview);
 $('#remission-client-name').addEventListener('change', () => {
@@ -1072,7 +1105,7 @@ $('#remission-form').addEventListener('submit', async event => {
     $('#remission-dialog').showModal();
     try {
       await refreshAll();
-      toast('Remisión finalizada. Inventario y resumen actualizados.');
+      toast(remission.portalOrderId ? `Remisión finalizada. Pedido #${remission.portalOrderId} despachado y reserva liberada.` : 'Remisión finalizada. Inventario y resumen actualizados.');
     } catch {
       toast('Remisión guardada. No se pudo actualizar la pantalla; use Actualizar inventario.');
     }

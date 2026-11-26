@@ -157,6 +157,7 @@ function renderAdminOrders(orders) {
     if (!card) continue;
     if (Number(order.revision) > 1) card.insertAdjacentHTML('beforeend', `<p class="pickup-summary">Pedido actualizado ${Number(order.revision) - 1} ${Number(order.revision) === 2 ? 'vez' : 'veces'} · ${new Date(order.updated_at).toLocaleString('es-CO')}</p>`);
     if (order.status === 'APROBADO') card.insertAdjacentHTML('beforeend', `<div class="order-actions"><button class="secondary" type="button" data-toggle-modifications="${order.id}" data-locked="${order.modifications_locked ? 'true' : 'false'}">${order.modifications_locked ? 'Permitir más productos' : 'Cerrar modificaciones'}</button></div>${order.modifications_locked ? '<p class="pickup-summary">En preparación: el cliente no puede agregar productos.</p>' : ''}`);
+    if (order.status === 'DESPACHADO') { card.querySelector('[data-delete-order]')?.remove(); card.insertAdjacentHTML('beforeend', '<p class="pickup-summary">Pedido terminado con remisión. Para reabrirlo, anula la remisión vinculada.</p>'); }
     if (!order.customer_whatsapp_status) continue;
     const status = order.customer_whatsapp_status;
     const label = status === 'SOLICITADO' ? 'aceptada por Meta' : status === 'ERROR' ? 'falló; se reintentará' : status === 'CANCELADO' ? 'cancelada' : 'en proceso';
