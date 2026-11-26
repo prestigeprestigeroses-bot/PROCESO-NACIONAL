@@ -65,3 +65,44 @@ body{background:#f0f8f1}.top{background:#246548}.hero{background:linear-gradient
   .order-matrix .matrix-empty{min-height:64px}
 }
 @media(max-width:360px){.order-matrix .matrix-cell{grid-template-columns:minmax(0,1fr) 20px minmax(0,1fr);column-gap:1px}.order-matrix .matrix-cell input{width:20px;font-size:12px}.order-matrix .matrix-cell button{font-size:14px}}
+.catalog-actions{justify-content:flex-end;margin:12px 0 8px}
+.mobile-quantity-trigger{display:none}
+.order-matrix thead th[data-grade="NACIONAL"]{background:#267448}
+.order-matrix thead th[data-grade="BAJAS"]{background:#a92f47}
+.order-matrix thead th[data-grade="NACIONAL GRANEL"]{background:#285f9a}
+.order-matrix thead th[data-grade="BAJAS GRANEL"]{background:#7650a0}
+.order-matrix thead th[data-grade="EUCALIPTO"]{background:#147c82}
+#quantity-dialog{width:min(420px,calc(100vw - 28px))}
+#quantity-dialog h2{font-size:19px}
+#quantity-dialog p{margin:4px 0 18px;color:#315942}
+.quantity-controls{display:grid;grid-template-columns:58px minmax(0,1fr) 58px;gap:10px;align-items:center}
+.quantity-controls button{height:58px;border:1px solid #87b99a;border-radius:12px;background:#e7f5eb;color:#185b38;font-size:32px;font-weight:800}
+.quantity-controls input{height:58px;margin:0;padding:6px;text-align:center;font-size:28px;font-weight:800}
+.quantity-save{width:100%;margin-top:18px}
+@media(max-width:740px){
+  main{padding:8px 6px}
+  .top{height:54px;padding:0 8px}
+  .portal-logo{width:96px}
+  .brand-subtitle{display:none}
+  #customer .hero{padding:9px 12px;border-radius:12px}
+  #customer .hero .eyebrow{font-size:9px;letter-spacing:.12em}
+  #customer #greeting{margin:2px 0 0;font-size:clamp(15px,4.2vw,19px);line-height:1.15}
+  #customer .catalog-actions{margin:6px 0 5px}
+  #customer .catalog-actions .secondary{padding:6px 8px;font-size:10px}
+  .order-matrix-scroll{width:100%;max-width:100%;overflow:visible;margin:0;padding:0;border:0;border-radius:0;background:transparent}
+  .order-matrix{width:100%;min-width:0;table-layout:fixed;border-spacing:1px}
+  .order-matrix thead th:first-child{width:14%;min-width:0;padding:4px 1px;font-size:9px;position:static;box-shadow:none}
+  .order-matrix thead th:not(:first-child){width:16.6%;min-width:0;padding:4px 1px;font-size:9px;line-height:1.08}
+  .order-matrix thead th small{font-size:8px;line-height:1.1;overflow-wrap:anywhere}
+  .order-matrix tbody th{position:static;min-width:0;padding:2px 1px;box-shadow:none;font-size:8px;overflow-wrap:anywhere}
+  .order-matrix td{min-width:0;padding:0}
+  .matrix-color{display:flex;flex-direction:column;align-items:center;gap:2px;text-align:center;font-size:8px;line-height:1.06}
+  .matrix-color .swatch{width:14px;height:14px}
+  .order-matrix .matrix-cell{display:block;min-height:0;height:45px;padding:2px;border-width:1px;border-radius:7px}
+  .order-matrix .matrix-cell>button[data-action],.order-matrix .matrix-cell>input,.order-matrix .matrix-cell>small{display:none}
+  .order-matrix .matrix-cell .mobile-quantity-trigger{display:flex;position:relative;flex-direction:column;align-items:center;justify-content:center;gap:1px;width:100%;height:100%;min-width:0;padding:0;border:0;border-radius:5px;background:transparent;color:#155734;box-shadow:none;cursor:pointer}
+  .order-matrix .matrix-cell .mobile-quantity-trigger::after{content:'+';position:absolute;right:2px;top:0;font-size:11px;font-weight:800}
+  .mobile-quantity-value{font-size:15px;line-height:1;font-weight:800}
+  .order-matrix .matrix-cell .mobile-quantity-trigger small{display:block;max-width:100%;color:#246844;font-size:8px;line-height:1.05;overflow-wrap:anywhere}
+  .order-matrix .matrix-empty{min-height:0;height:45px;border-radius:7px}
+}

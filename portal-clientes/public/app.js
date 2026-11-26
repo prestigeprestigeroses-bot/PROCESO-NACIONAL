@@ -67,13 +67,39 @@ function syncOrderState(updateError = true) {
   return issue;
 }
 function renderCatalog() {
-  const previousScroll = $('catalog').querySelector('.order-matrix-scroll')?.scrollLeft || 0;
   const available = catalog;
   if (!available.length) { $('catalog').innerHTML = '<p class="catalog-hint">No hay flor disponible por ahora.</p>'; renderCart(); return; }
   $('catalog').innerHTML = `<p class="matrix-scroll-hint">Desliza hacia la derecha para ver más categorías <span aria-hidden="true">→</span></p><div class="order-matrix-scroll"><table class="order-matrix"><thead><tr><th scope="col">Color</th>${gradeOrder.map(grade => `<th scope="col"><span>${esc(gradeNames[grade])}</span><small>${format(prices[grade])} / ${grade === 'EUCALIPTO' ? 'tallo' : 'ramo'}</small></th>`).join('')}</tr></thead><tbody>${available.map(row => `<tr><th scope="row"><span class="matrix-color"><span class="swatch" style="background:${row.color === 'COLORES SURTIDOS' ? rainbow : (swatches[row.color] || '#ddd')}"></span>${esc(row.color)}</span></th>${gradeOrder.map(grade => { const eucalyptus = row.color === 'EUCALIPTO' && grade === 'EUCALIPTO', stock = row.grades[grade]?.bunches || 0, qty = cart.get(cartKey(row.color,grade)) || 0, limit = eucalyptus ? 10000 : stock; return `<td>${stock || eucalyptus || qty ? `<div class="matrix-cell ${eucalyptus ? 'matrix-cell--free' : ''} ${qty ? 'matrix-cell--selected' : ''}"><button data-action="minus" data-color="${esc(row.color)}" data-grade="${esc(grade)}" ${qty ? '' : 'disabled'} aria-label="Quitar ${esc(gradeNames[grade])} de ${esc(row.color)}">−</button><input data-color="${esc(row.color)}" data-grade="${esc(grade)}" type="number" inputmode="numeric" min="0" max="${limit}" value="${qty}" aria-label="${eucalyptus ? 'Tallos de eucalipto' : `Ramos de ${esc(row.color)}, ${esc(gradeNames[grade])}`}"><button data-action="plus" data-color="${esc(row.color)}" data-grade="${esc(grade)}" ${qty >= limit ? 'disabled' : ''} aria-label="Agregar ${esc(gradeNames[grade])} de ${esc(row.color)}">+</button><small>${eucalyptus ? 'Tallos · cantidad libre' : `● ${stock} disponibles`}</small></div>` : '<div class="matrix-empty" aria-label="Sin disponibilidad">—</div>'}</td>`; }).join('')}</tr>`).join('')}</tbody></table></div><p class="matrix-help">Colores surtidos usa los mismos ramos de los demás colores, excepto rojos. Eucalipto se pide por tallos y no descuenta rosas.</p>`;
-  $('catalog').querySelector('.order-matrix-scroll').scrollLeft = previousScroll;
+  $('catalog').querySelector('.matrix-scroll-hint')?.remove();
+  $('catalog').querySelector('.matrix-help')?.remove();
+  $('catalog').querySelectorAll('.order-matrix thead th').forEach((heading, index) => {
+    if (index) heading.dataset.grade = gradeOrder[index - 1];
+  });
+  $('catalog').querySelectorAll('.matrix-cell').forEach(cell => {
+    const input = cell.querySelector('input[data-color]');
+    const trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'mobile-quantity-trigger';
+    trigger.dataset.quantityOpen = 'true';
+    trigger.dataset.color = input.dataset.color;
+    trigger.dataset.grade = input.dataset.grade;
+    trigger.setAttribute('aria-label', `Cambiar cantidad de ${input.getAttribute('aria-label')}`);
+    trigger.innerHTML = `<span class="mobile-quantity-value">${input.value}</span><small>${cell.querySelector('small').textContent}</small>`;
+    cell.append(trigger);
+  });
   renderCart();
   syncOrderState();
+}
+let quantityTarget = null;
+function openQuantityDialog(color, grade) {
+  const stock = grade === 'EUCALIPTO' ? 10000 : (catalog.find(row => row.color === color)?.grades[grade]?.bunches || 0);
+  quantityTarget = { color, grade, stock };
+  $('quantity-title').textContent = `${color} · ${gradeNames[grade] || grade}`;
+  $('quantity-available').textContent = grade === 'EUCALIPTO' ? 'Ingresa los tallos que necesitas.' : `${stock} ramos disponibles`;
+  $('quantity-value').max = String(stock);
+  $('quantity-value').value = String(cart.get(cartKey(color, grade)) || 0);
+  $('quantity-dialog').showModal();
+  $('quantity-value').focus();
 }
 function setQuantity(color, grade, value) {
   const stock = color === 'EUCALIPTO' && grade === 'EUCALIPTO' ? 10000 : (catalog.find(x => x.color === color)?.grades[grade]?.bunches || 0);
@@ -183,8 +209,22 @@ async function loadAdmin() {
 async function init() { const s = await api('/api/session'); role = s.role; catalogEvents?.close(); catalogEvents = null; if (role === 'customer') { show('customer'); $('greeting').textContent = `Hola, ${s.name} 👋`; await loadCatalog(); await loadMyOrders(); catalogEvents = new EventSource('/api/catalog/events'); catalogEvents.addEventListener('inventory', () => { if (!ordering) void loadCatalog().catch(() => {}); }); } else if (role === 'admin') { show('admin'); await loadAdmin(); if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission(); } else show('login'); }
 $('login-form').addEventListener('submit', async e => { e.preventDefault(); $('login-error').textContent=''; try { await api('/api/login', { method:'POST',body:JSON.stringify({ role:$('admin-mode').checked?'admin':'customer',phone:$('phone').value,password:$('password').value }) }); $('password').value=''; await init(); } catch (err) { $('login-error').textContent=err.message; } });
 $('logout').addEventListener('click', async () => { await api('/api/logout',{method:'POST'}); catalogEvents?.close(); catalogEvents = null; cart.clear(); role=null; show('login'); });
-$('catalog').addEventListener('click', e => { const b=e.target.closest('button[data-action]'); if (!b) return; const key=cartKey(b.dataset.color,b.dataset.grade); setQuantity(b.dataset.color,b.dataset.grade,(cart.get(key)||0)+(b.dataset.action==='plus'?1:-1)); });
+$('catalog').addEventListener('click', e => { const open=e.target.closest('[data-quantity-open]'); if (open) { openQuantityDialog(open.dataset.color,open.dataset.grade); return; } const b=e.target.closest('button[data-action]'); if (!b) return; const key=cartKey(b.dataset.color,b.dataset.grade); setQuantity(b.dataset.color,b.dataset.grade,(cart.get(key)||0)+(b.dataset.action==='plus'?1:-1)); });
 $('catalog').addEventListener('change', e => { const input=e.target.closest('input[data-color]'); if(input) setQuantity(input.dataset.color,input.dataset.grade,input.value); });
+$('close-quantity').addEventListener('click', () => $('quantity-dialog').close());
+document.querySelectorAll('[data-quantity-step]').forEach(button => button.addEventListener('click', () => {
+  if (!quantityTarget) return;
+  const input = $('quantity-value');
+  input.value = String(Math.max(0, Math.min(quantityTarget.stock, (Math.trunc(Number(input.value)) || 0) + Number(button.dataset.quantityStep))));
+}));
+$('quantity-form').addEventListener('submit', event => {
+  event.preventDefault();
+  if (!quantityTarget) return;
+  const { color, grade } = quantityTarget;
+  $('quantity-dialog').close();
+  setQuantity(color, grade, $('quantity-value').value);
+  quantityTarget = null;
+});
 $('color-select').addEventListener('change', renderCatalog);
 $('color-options').addEventListener('click', e => { const option = e.target.closest('[data-color-option]'); if (!option) return; $('color-select').value = option.dataset.colorOption; $('color-menu').open = false; renderCatalog(); });
 $('refresh').addEventListener('click', async () => { try { await loadCatalog(); toast('Inventario actualizado.'); } catch(e) { toast(e.message); } });
