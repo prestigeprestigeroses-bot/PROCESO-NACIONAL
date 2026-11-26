@@ -4,6 +4,7 @@ const path = require('node:path');
 const express = require('express');
 const XLSX = require('xlsx');
 const store = require('./src/store');
+const { buildPortalShortages } = require('./src/portal-shortages');
 
 const app = express();
 const port = Number(process.env.PORT) || 3000;
@@ -153,6 +154,14 @@ app.get('/api/reports/sales.xlsx', requireReportsAccess, async (request, respons
   } catch (error) { next(error); }
 });
 app.get('/api/inventory', requireAuth, async (_request, response, next) => { try { response.json(await store.listInventory()); } catch (error) { next(error); } });
+app.get('/api/inventory/portal-shortages', requireAuth, async (_request, response, next) => {
+  try {
+    const reservations = await store.listPortalReservations();
+    if (reservations === null) return response.json({ enabled: false, shortages: [] });
+    const inventory = await store.listInventory();
+    response.json({ enabled: true, shortages: buildPortalShortages(inventory, reservations) });
+  } catch (error) { next(error); }
+});
 app.get('/api/inventory/reconciliation', requireAuth, async (_request, response, next) => { try { response.json({ sources: await store.listInventory(true), adjustments: await store.listInventoryAdjustments() }); } catch (error) { next(error); } });
 app.post('/api/inventory/reconciliation', requireAuth, async (request, response, next) => { try { response.status(201).json(await store.reconcileInventory(request.body)); } catch (error) { next(error); } });
 app.put('/api/inventory/reconciliation/:id/cancel', requireAuth, async (request, response, next) => { try { response.json(await store.cancelInventoryAdjustment(request.params.id, request.body)); } catch (error) { next(error); } });

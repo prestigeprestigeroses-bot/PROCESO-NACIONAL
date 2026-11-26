@@ -34,8 +34,9 @@ async function refreshAll() {
   const version = ++state.refreshVersion;
   const fresh = { cache: 'no-store' };
   const inventoryRefresh = refreshInventory().catch(() => false);
+  const shortageRefresh = refreshPortalShortages().catch(() => false);
   const results = await Promise.allSettled([api('/api/dashboard', fresh), api('/api/config', fresh), api('/api/price-lists', fresh), api('/api/export-transfers', fresh), api('/api/inventory/reconciliation', fresh), api('/api/inventory/waste', fresh), api('/api/inventory/grade-transfers', fresh)]);
-  await inventoryRefresh;
+  await Promise.all([inventoryRefresh, shortageRefresh]);
   if (version !== state.refreshVersion) return;
   const [dashboard, config, prices, transfers, reconciliation, waste, gradeTransfers] = results;
   if (dashboard.status === 'fulfilled') { state.remissions = dashboard.value.remissions; state.totals = dashboard.value.totals; renderDashboard(); }
@@ -51,6 +52,24 @@ function renderInventorySyncStatus() {
   const time = state.inventoryLastSyncedAt ? new Intl.DateTimeFormat('es-CO', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(state.inventoryLastSyncedAt) : null;
   const message = state.inventorySyncError ? `No se pudo actualizar el inventario. ${time ? `Última actualización correcta: ${time}.` : 'No hay datos confirmados.'} Se reintentará automáticamente.` : time ? `Inventario actualizado a las ${time}.` : 'Consultando inventario...';
   for (const element of [$('#inventory-sync-status'), $('#remission-sync-status')]) { element.textContent = message; element.classList.toggle('is-error', Boolean(state.inventorySyncError)); }
+}
+
+let shortageFingerprint = '';
+async function refreshPortalShortages() {
+  const result = await api('/api/inventory/portal-shortages', { cache: 'no-store' });
+  const shortages = result.enabled ? result.shortages : [];
+  const fingerprint = JSON.stringify(shortages);
+  if (fingerprint === shortageFingerprint) return;
+  shortageFingerprint = fingerprint;
+  const alert = $('#portal-shortage-alert');
+  alert.classList.toggle('is-hidden', shortages.length === 0);
+  if (!shortages.length) return;
+  const total = shortages.reduce((sum, item) => sum + Number(item.shortage), 0);
+  $('#portal-shortage-total').textContent = `${bunchLabel(total)} por ingresar · ${shortages.length} ${shortages.length === 1 ? 'categoría' : 'categorías'}`;
+  $('#portal-shortage-list').innerHTML = shortages.map(item => {
+    const orders = item.orders.map(order => `#${Number(order.id)} ${escapeHtml(order.name)} (${escapeHtml(order.pickupDate)})`).join(', ');
+    return `<li><strong>${escapeHtml(item.color)} · ${escapeHtml(item.grade)}</strong><span>Faltan ${bunchLabel(item.shortage)} · Físico ${number(item.physical)} / Apartado ${number(item.reserved)}</span><small>Pedidos: ${orders}</small></li>`;
+  }).join('');
 }
 
 async function refreshInventory() {
@@ -791,6 +810,7 @@ $('#inventory-grade').addEventListener('change', event => setGradeFilter(event.t
 $$('[data-clear-filters]').forEach(button => button.addEventListener('click', () => { setDateFilter(''); setGradeFilter('ALL'); }));
 $('#step-grade-filter').addEventListener('change', event => { state.stepGrade = event.target.value; renderVarietyOptions(); });
 $('#refresh-remission-inventory').addEventListener('click', () => refreshRemissionInventory(true));
+$('#portal-shortage-remissions').addEventListener('click', () => switchView('new-remission'));
 $('#line-variety').addEventListener('change', renderStockPreview);
 $('#remission-client-name').addEventListener('input', renderStockPreview);
 $('#remission-client-name').addEventListener('change', () => {

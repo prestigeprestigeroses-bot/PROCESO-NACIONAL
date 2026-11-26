@@ -1162,6 +1162,23 @@ async function listWaste(limit = 100) {
   return result.rows.map(mapWaste);
 }
 
+async function listPortalReservations() {
+  if (!usePostgres) return null;
+  const { rows: tables } = await pool.query("SELECT to_regclass('public.portal_inventory_reservations') AS reservations, to_regclass('public.portal_orders') AS orders, to_regclass('public.portal_customers') AS customers");
+  if (!tables[0].reservations || !tables[0].orders || !tables[0].customers) return null;
+  const { rows } = await pool.query(`
+    SELECT r.order_id, c.name, o.pickup_date::text AS pickup_date,
+           r.color, r.grade, SUM(r.bunches)::int AS bunches
+    FROM portal_inventory_reservations r
+    JOIN portal_orders o ON o.id = r.order_id
+    JOIN portal_customers c ON c.id = o.customer_id
+    WHERE o.status IN ('PENDIENTE', 'APROBADO')
+    GROUP BY r.order_id, c.name, o.pickup_date, r.color, r.grade
+    ORDER BY o.pickup_date, r.order_id
+  `);
+  return rows;
+}
+
 async function createWaste(input) {
   if (input.group) return createGroupedWaste(input);
   const key = String(input.key || '');
@@ -1468,4 +1485,4 @@ async function inventoryReport(from, to) {
   return { from: start, to: end, opening, closing };
 }
 
-module.exports = { init, listInventory, listInventoryAdjustments, reconcileInventory, cancelInventoryAdjustment, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, assignRemissionItems, setRemissionPrices, updateRemissionNotes, cancelRemission, renumberRemissions, listExportTransfers, createExportTransfer, cancelExportTransfer, listGradeTransfers, createGradeTransfer, listWaste, createWaste, cancelWaste, listRemissions, searchRemissions, getRemission, dashboard, salesReport, wasteReport, movementsReport, inventoryReport, usePostgres };
+module.exports = { init, listInventory, listInventoryAdjustments, reconcileInventory, cancelInventoryAdjustment, saveInventory, adjustInventory, listPriceLists, savePriceList, deletePriceList, createRemission, assignRemissionItems, setRemissionPrices, updateRemissionNotes, cancelRemission, renumberRemissions, listExportTransfers, createExportTransfer, cancelExportTransfer, listGradeTransfers, createGradeTransfer, listWaste, listPortalReservations, createWaste, cancelWaste, listRemissions, searchRemissions, getRemission, dashboard, salesReport, wasteReport, movementsReport, inventoryReport, usePostgres };

@@ -10,6 +10,7 @@ const { listInventory } = require('./inventory');
 const { allocateReservations, applyReservations } = require('./reservations');
 const { planAdditions } = require('./order-amendment');
 const { buildInventoryOverview } = require('./inventory-overview');
+const { colorGroups, colorOf } = require('./colors');
 const whatsapp = require('./whatsapp');
 
 if (!process.env.DATABASE_URL) throw new Error('Configure DATABASE_URL en las variables del servicio o en portal-clientes/.env');
@@ -20,23 +21,10 @@ const app = express();
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false });
 const secret = sessionSecret;
 const grades = ['NACIONAL', 'BAJAS', 'NACIONAL GRANEL', 'BAJAS GRANEL', 'EUCALIPTO'];
-const colorGroups = [
-  ['ROJOS', ['FREEDOM', 'EXPLORER']],
-  ['BLANCOS', ['VENDELA', 'MONDIAL', 'CANDLELIGHT', 'WHITE OHARA']],
-  ['ROSADOS CLAROS', ['PINK MONDIAL', 'BLESSING', 'PINK OHARA', 'SUMMERSAND', 'SOMMERSAND']],
-  ['ROSADOS MEDIOS', ['SWAN']],
-  ['ROSADOS FUERTES', ['PINK FLOYD', 'QUEEN BERRY']],
-  ['AMARILLOS', ['MOMENTUM', 'YELLOW BIKINI', 'HUMMER']],
-  ['MORADOS', ['STAR PLATINUM', 'DEEP PURPLE', 'MOODY BLUE', 'MOODY BLUES']],
-  ['NARANJAS', ['HILUX', 'CORAL REEF']],
-  ['PEACH', ['TIFFANY', 'SHIMMER']],
-  ['ARENA', ['QUICK SAND', 'QUICKSAND']]
-];
 const assortedColor = 'COLORES SURTIDOS';
 const regularColors = colorGroups.map(([name]) => name);
 const assortedColors = regularColors.filter(color => color !== 'ROJOS');
 const colors = [...regularColors, assortedColor, 'EUCALIPTO'];
-const colorOf = new Map(colorGroups.flatMap(([color, names]) => names.map(name => [name, color])));
 const norm = value => String(value || '').trim().replace(/\s+/g, ' ').toUpperCase();
 function loginIdentifier(value) {
   const identifier = String(value || '').trim();

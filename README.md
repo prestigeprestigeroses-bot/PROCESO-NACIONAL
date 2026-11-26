@@ -16,6 +16,7 @@ Aplicación web para controlar salidas nacionales de flor. Consulta existencias 
 - Cálculo automático de tallos usando la cantidad de tallos por ramo registrada en el inventario.
 - Anulación con motivo obligatorio, conservación del historial y devolución automática de la flor al inventario.
 - Traslado de ramos de Bajas a Exportación con responsable, motivo e historial; se descuentan de la disponibilidad sin modificar los escaneos y pueden devolverse anulando el traslado.
+- Alerta flotante cuando las reservas activas del portal superan la flor física por color y grado. Muestra los ramos por ingresar y los pedidos implicados; se actualiza cada 10 segundos y después de registrar o anular desechos. Requiere que ambos servicios usen el mismo PostgreSQL. Sin una relación entre pedido y remisión, la alerta es orientativa y puede incluir pedidos ya despachados.
 - Documento A4 listo para imprimir o guardar como PDF, con firma y sello de recibido.
 - Historial de remisiones y reimpresión.
 - Acceso protegido por usuario y contraseña.
