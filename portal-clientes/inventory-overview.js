@@ -17,7 +17,7 @@ function buildInventoryOverview(root, reservations, grades, assortedColor) {
     cell.orders.push({ id: reservation.order_id, name: reservation.name, status: reservation.status, bunches });
   }
   return [...cells.values()].filter(cell => cell.real || cell.pending || cell.approved || cell.dispatched).map(cell => ({
-    ...cell, available: Math.max(0, cell.real - cell.pending - cell.approved - cell.dispatched),
+    ...cell, available: Math.max(0, cell.real - cell.pending - cell.approved),
     shortage: Math.max(0, cell.pending + cell.approved - cell.real)
   }));
 }

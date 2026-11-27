@@ -27,7 +27,7 @@ test('muestra inventario real, reservas por pedido y faltante sin duplicar color
   });
 });
 
-test('los despachos manuales no producen una alerta falsa ni aumentan la disponibilidad', () => {
+test('un despacho ya descontado del inventario real no reduce de nuevo lo disponible', () => {
   const root = [{ color: 'ROJOS', grades: { NACIONAL: { bunches: 5 } } }];
   const reservations = [
     { order_id: 42, name: 'Rita', status: 'DESPACHADO_MANUAL', color: 'ROJOS', grade: 'NACIONAL', bunches: 3 },
@@ -38,6 +38,23 @@ test('los despachos manuales no producen una alerta falsa ni aumentan la disponi
   assert.equal(cell.approved, 5);
   assert.equal(cell.available, 0);
   assert.equal(cell.shortage, 0);
+});
+
+test('el disponible se calcula por color y categoría solo con pedidos activos', () => {
+  const root = [
+    { color: 'ROJOS', grades: { NACIONAL: { bunches: 39 } } },
+    { color: 'BLANCOS', grades: { NACIONAL: { bunches: 22 } } }
+  ];
+  const reservations = [
+    { order_id: 45, name: 'Rita', status: 'DESPACHADO_MANUAL', color: 'ROJOS', grade: 'NACIONAL', bunches: 21 },
+    { order_id: 43, name: 'Anibal', status: 'APROBADO', color: 'ROJOS', grade: 'NACIONAL', bunches: 39 },
+    { order_id: 44, name: 'Carlos', status: 'APROBADO', color: 'BLANCOS', grade: 'NACIONAL', bunches: 21 }
+  ];
+  const cells = buildInventoryOverview(root, reservations, ['NACIONAL'], 'COLORES SURTIDOS');
+  assert.equal(cells.reduce((sum, cell) => sum + cell.real, 0), 61);
+  assert.equal(cells.reduce((sum, cell) => sum + cell.approved, 0), 60);
+  assert.equal(cells.reduce((sum, cell) => sum + cell.available, 0), 1);
+  assert.equal(cells.reduce((sum, cell) => sum + cell.shortage, 0), 0);
 });
 
 test('la alerta permanece si los pedidos activos superan el inventario real', () => {

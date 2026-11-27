@@ -106,7 +106,7 @@ async function availability(connection = pool, excludeOrderId = null) {
   const { rows: reservations } = await connection.query(`
     SELECT r.color,r.grade,SUM(r.bunches)::int AS bunches
     FROM portal_inventory_reservations r JOIN portal_orders o ON o.id=r.order_id
-    WHERE o.status IN ('PENDIENTE','APROBADO','DESPACHADO_MANUAL') AND ($1::bigint IS NULL OR o.id<>$1)
+    WHERE o.status IN ('PENDIENTE','APROBADO') AND ($1::bigint IS NULL OR o.id<>$1)
     GROUP BY r.color,r.grade
   `, [excludeOrderId]);
   return applyReservations(summarize(lots), reservations, assortedColors);
