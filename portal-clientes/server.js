@@ -106,7 +106,7 @@ async function availability(connection = pool, excludeOrderId = null) {
   const { rows: reservations } = await connection.query(`
     SELECT r.color,r.grade,SUM(r.bunches)::int AS bunches
     FROM portal_inventory_reservations r JOIN portal_orders o ON o.id=r.order_id
-    WHERE o.status IN ('PENDIENTE','APROBADO') AND ($1::bigint IS NULL OR o.id<>$1)
+    WHERE o.status IN ('PENDIENTE','APROBADO','DESPACHADO_MANUAL') AND ($1::bigint IS NULL OR o.id<>$1)
     GROUP BY r.color,r.grade
   `, [excludeOrderId]);
   return applyReservations(summarize(lots), reservations, assortedColors);
@@ -138,7 +138,7 @@ async function processWhatsAppQueue() {
         const { rows } = await pool.query(`SELECT o.id,o.status,o.total,o.revision,to_char(o.pickup_date,'YYYY-MM-DD') AS pickup_date,o.pickup_hour,c.name,
           COALESCE(json_agg(json_build_object('color',i.color,'grade',i.grade,'bunches',i.bunches) ORDER BY i.id) FILTER (WHERE i.id IS NOT NULL),'[]') AS items
           FROM portal_orders o JOIN portal_customers c ON c.id=o.customer_id LEFT JOIN portal_order_items i ON i.order_id=o.id
-          WHERE o.id=$1 AND o.revision=$2 AND o.status IN ('PENDIENTE','APROBADO') GROUP BY o.id,c.id`, [job.order_id, job.order_revision]);
+          WHERE o.id=$1 AND o.revision=$2 AND o.status IN ('PENDIENTE','APROBADO','DESPACHADO_MANUAL') GROUP BY o.id,c.id`, [job.order_id, job.order_revision]);
         if (!rows[0]) { await pool.query("UPDATE portal_whatsapp_notifications SET status='CANCELADO',updated_at=NOW() WHERE order_id=$1 AND order_revision=$2", [job.order_id, job.order_revision]); continue; }
         const messageId = await whatsapp.sendOrderNotice(rows[0]);
         await pool.query("UPDATE portal_whatsapp_notifications SET status='SOLICITADO',message_id=$2,last_error='',updated_at=NOW() WHERE order_id=$1 AND order_revision=$3 AND status='ENVIANDO'", [job.order_id, messageId, job.order_revision]);
@@ -175,7 +175,7 @@ async function processCustomerWhatsAppQueue() {
         const { rows } = await pool.query(`SELECT o.id,o.total,o.revision,to_char(o.pickup_date,'YYYY-MM-DD') AS pickup_date,o.pickup_hour,c.name,c.phone,
           COALESCE(json_agg(json_build_object('color',i.color,'grade',i.grade,'bunches',i.bunches) ORDER BY i.id) FILTER (WHERE i.id IS NOT NULL),'[]') AS items
           FROM portal_orders o JOIN portal_customers c ON c.id=o.customer_id LEFT JOIN portal_order_items i ON i.order_id=o.id
-          WHERE o.id=$1 AND o.revision=$2 AND o.status='APROBADO' GROUP BY o.id,c.id`, [job.order_id, job.order_revision]);
+          WHERE o.id=$1 AND o.revision=$2 AND o.status IN ('APROBADO','DESPACHADO_MANUAL') GROUP BY o.id,c.id`, [job.order_id, job.order_revision]);
         if (!rows[0]) { await pool.query("UPDATE portal_customer_notifications SET status='CANCELADO',updated_at=NOW() WHERE order_id=$1 AND order_revision=$2", [job.order_id, job.order_revision]); continue; }
         const messageId = await whatsapp.sendCustomerApproval(rows[0]);
         await pool.query("UPDATE portal_customer_notifications SET status='SOLICITADO',message_id=$2,last_error='',updated_at=NOW() WHERE order_id=$1 AND order_revision=$3 AND status='ENVIANDO'", [job.order_id, messageId, job.order_revision]);
@@ -242,6 +242,7 @@ async function init() {
   await pool.query('ALTER TABLE portal_orders ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 1');
   await pool.query('ALTER TABLE portal_orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()');
   await pool.query('ALTER TABLE portal_orders ADD COLUMN IF NOT EXISTS modifications_locked BOOLEAN NOT NULL DEFAULT FALSE');
+  await pool.query('ALTER TABLE portal_orders ADD COLUMN IF NOT EXISTS manual_dispatch_prior_locked BOOLEAN');
   await pool.query('ALTER TABLE portal_whatsapp_notifications ADD COLUMN IF NOT EXISTS order_revision INTEGER NOT NULL DEFAULT 1');
   await pool.query('ALTER TABLE portal_customer_notifications ADD COLUMN IF NOT EXISTS order_revision INTEGER NOT NULL DEFAULT 1');
   await pool.query('ALTER TABLE portal_customers ADD COLUMN IF NOT EXISTS login_identifier VARCHAR(30)');
@@ -370,7 +371,7 @@ app.get('/api/admin/inventory', auth('admin'), async (_req, res) => {
       FROM portal_inventory_reservations r
       JOIN portal_orders o ON o.id=r.order_id
       JOIN portal_customers c ON c.id=o.customer_id
-      WHERE o.status IN ('PENDIENTE','APROBADO')
+      WHERE o.status IN ('PENDIENTE','APROBADO','DESPACHADO_MANUAL')
       GROUP BY o.id,o.status,c.name,r.color,r.grade
       ORDER BY o.id DESC
     `);
@@ -420,8 +421,8 @@ app.delete('/api/admin/customers/:id', auth('admin'), async (req, res) => {
     await client.query("SELECT pg_advisory_xact_lock(hashtext('portal-orders'))");
     const found = await client.query('SELECT id FROM portal_customers WHERE id=$1 FOR UPDATE', [id]);
     if (!found.rowCount) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Cliente no encontrado.' }); }
-    const shipped = await client.query("SELECT id FROM portal_orders WHERE customer_id=$1 AND status='DESPACHADO' LIMIT 1", [id]);
-    if (shipped.rowCount) { await client.query('ROLLBACK'); return res.status(409).json({ error: 'Este cliente tiene un pedido vinculado a una remisión. Anule primero esa remisión.' }); }
+    const shipped = await client.query("SELECT id FROM portal_orders WHERE customer_id=$1 AND status IN ('DESPACHADO','DESPACHADO_MANUAL') LIMIT 1", [id]);
+    if (shipped.rowCount) { await client.query('ROLLBACK'); return res.status(409).json({ error: 'Este cliente tiene pedidos despachados. Revise o revierta los despachos antes de eliminarlo.' }); }
     await client.query('DELETE FROM portal_order_items WHERE order_id IN (SELECT id FROM portal_orders WHERE customer_id=$1)', [id]);
     await client.query('DELETE FROM portal_orders WHERE customer_id=$1', [id]);
     await client.query('DELETE FROM portal_customers WHERE id=$1', [id]);
@@ -451,7 +452,7 @@ app.delete('/api/admin/orders/:id', auth('admin'), async (req, res) => {
     await client.query("SELECT pg_advisory_xact_lock(hashtext('portal-orders'))");
     const found = await client.query('SELECT id,status FROM portal_orders WHERE id=$1 FOR UPDATE', [id]);
     if (!found.rowCount) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Pedido no encontrado.' }); }
-    if (found.rows[0].status === 'DESPACHADO') { await client.query('ROLLBACK'); return res.status(409).json({ error: 'Este pedido está vinculado a una remisión. Anule primero la remisión.' }); }
+    if (['DESPACHADO','DESPACHADO_MANUAL'].includes(found.rows[0].status)) { await client.query('ROLLBACK'); return res.status(409).json({ error: 'Este pedido ya fue despachado. Revierta el despacho manual o anule la remisión antes de eliminarlo.' }); }
     await client.query('DELETE FROM portal_order_items WHERE order_id=$1', [id]);
     await client.query('DELETE FROM portal_orders WHERE id=$1', [id]);
     await client.query('COMMIT');
@@ -476,6 +477,40 @@ app.post('/api/admin/orders/:id/cancel', auth('admin'), async (req, res) => {
     await client.query('COMMIT');
     broadcastCatalogChanged();
     res.json({ id, status: 'CANCELADO' });
+  } catch (error) { await client.query('ROLLBACK'); fail(res, error, 500); } finally { client.release(); }
+});
+app.post('/api/admin/orders/:id/dispatch', auth('admin'), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ error: 'Pedido no válido.' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('portal-orders'))");
+    const { rows } = await client.query('SELECT status,modifications_locked FROM portal_orders WHERE id=$1 FOR UPDATE', [id]);
+    if (!rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Pedido no encontrado.' }); }
+    if (rows[0].status !== 'APROBADO') { await client.query('ROLLBACK'); return res.status(409).json({ error: 'Solo se puede despachar manualmente un pedido aprobado.' }); }
+    await client.query(`UPDATE portal_orders SET status='DESPACHADO_MANUAL',manual_dispatch_prior_locked=modifications_locked,
+      modifications_locked=TRUE,updated_at=NOW() WHERE id=$1`, [id]);
+    await client.query('COMMIT');
+    broadcastCatalogChanged();
+    res.json({ id, status: 'DESPACHADO_MANUAL' });
+  } catch (error) { await client.query('ROLLBACK'); fail(res, error, 500); } finally { client.release(); }
+});
+app.post('/api/admin/orders/:id/undo-dispatch', auth('admin'), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ error: 'Pedido no válido.' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('portal-orders'))");
+    const { rows } = await client.query('SELECT status FROM portal_orders WHERE id=$1 FOR UPDATE', [id]);
+    if (!rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Pedido no encontrado.' }); }
+    if (rows[0].status !== 'DESPACHADO_MANUAL') { await client.query('ROLLBACK'); return res.status(409).json({ error: 'Este pedido no tiene un despacho manual para revertir.' }); }
+    await client.query(`UPDATE portal_orders SET status='APROBADO',modifications_locked=COALESCE(manual_dispatch_prior_locked,FALSE),
+      manual_dispatch_prior_locked=NULL,updated_at=NOW() WHERE id=$1`, [id]);
+    await client.query('COMMIT');
+    broadcastCatalogChanged();
+    res.json({ id, status: 'APROBADO' });
   } catch (error) { await client.query('ROLLBACK'); fail(res, error, 500); } finally { client.release(); }
 });
 async function decideOrder(id, decision, reason = '', notificationMessageId = null) {
