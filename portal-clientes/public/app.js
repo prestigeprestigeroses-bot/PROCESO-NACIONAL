@@ -124,7 +124,20 @@ async function loadCatalog() {
   renderCatalog();
   if (!priorIssue && cartIssue()) toast('El inventario cambió. Ajusta tu pedido antes de continuar.');
 }
-async function loadMyOrders() { myOrders = await api('/api/my-orders'); $('my-orders').innerHTML = myOrders.map(order => orderHtml(order,false)).join('') || '<p>Aún no tienes pedidos.</p>'; for (const order of myOrders) { const card = document.getElementById(`order-${order.id}`); if (!card) continue; if (Number(order.revision) > 1) card.insertAdjacentHTML('beforeend', `<p class="pickup-summary">Actualizado ${Number(order.revision) - 1} ${Number(order.revision) === 2 ? 'vez' : 'veces'} · ${new Date(order.updated_at).toLocaleString('es-CO')}</p>`); if (order.modifications_locked && order.status === 'APROBADO') card.insertAdjacentHTML('beforeend', '<p class="pickup-summary">En preparación: ya no se pueden agregar productos.</p>'); } if ($('review-dialog').open) updatePickupHours(); }
+async function loadMyOrders() {
+  myOrders = await api('/api/my-orders');
+  const container = $('my-orders');
+  const openShipped = new Set([...container.querySelectorAll('details.order-card--shipped[open]')].map(card => card.id));
+  container.innerHTML = myOrders.map(order => orderHtml(order,false)).join('') || '<p>Aún no tienes pedidos.</p>';
+  for (const order of myOrders) {
+    const card = container.querySelector(`#order-${order.id}`);
+    if (!card) continue;
+    if (openShipped.has(card.id)) card.open = true;
+    if (Number(order.revision) > 1) card.insertAdjacentHTML('beforeend', `<p class="pickup-summary">Actualizado ${Number(order.revision) - 1} ${Number(order.revision) === 2 ? 'vez' : 'veces'} · ${new Date(order.updated_at).toLocaleString('es-CO')}</p>`);
+    if (order.modifications_locked && order.status === 'APROBADO') card.insertAdjacentHTML('beforeend', '<p class="pickup-summary">En preparación: ya no se pueden agregar productos.</p>');
+  }
+  if ($('review-dialog').open) updatePickupHours();
+}
 function orderProductsHtml(items) {
   const groups = new Map();
   for (const item of items) {
@@ -150,10 +163,23 @@ function orderProductsHtml(items) {
   return `<div class="order-product-summary"><strong>Total: ${unit('NACIONAL', totalBunches)}</strong>${totalStems ? `<strong>${unit('EUCALIPTO', totalStems)}</strong>` : ''}</div><div class="order-category-list">${sections}</div>`;
 }
 function orderHtml(order, admin) {
-  const status = ['APROBADO','DESPACHADO_MANUAL','DESPACHADO'].includes(order.status) ? 'approved' : ['RECHAZADO','CANCELADO'].includes(order.status) ? 'rejected' : '';
+  const shipped = ['DESPACHADO_MANUAL','DESPACHADO'].includes(order.status);
+  const status = shipped ? 'shipped' : order.status === 'APROBADO' ? 'approved' : ['RECHAZADO','CANCELADO'].includes(order.status) ? 'rejected' : '';
   const statusLabel = order.status === 'DESPACHADO_MANUAL' ? 'DESPACHADO' : order.status;
   const active = ['PENDIENTE','APROBADO'].includes(order.status);
-  return `<article class="order-card" id="order-${order.id}"><div class="order-top"><div><h3>Pedido #${order.id}${admin ? ` · ${esc(order.name)}` : ''}</h3><p>${new Date(order.created_at).toLocaleString('es-CO')}${admin ? ` · ${esc(order.phone)}` : ''}</p></div><span class="pill ${status}">${esc(statusLabel)}</span></div>${orderProductsHtml(order.items)}${order.pickup_date ? `<p class="pickup-summary">Recogida: ${esc(String(order.pickup_date).slice(0,10))} · ${String(order.pickup_hour).padStart(2,'0')}:00</p>` : ''}<p class="order-price"><strong>Valor total: ${format(order.total)}</strong>${order.notes ? ` · ${esc(order.notes)}` : ''}</p>${admin && order.whatsapp_status ? `<p class="notice-status">Aviso WhatsApp: ${order.whatsapp_status === 'SOLICITADO' ? 'aceptado por Meta' : order.whatsapp_status === 'ERROR' ? 'falló; se reintentará' : order.whatsapp_status === 'CANCELADO' ? 'cancelado' : automaticWhatsApp ? 'en proceso' : 'pendiente de configurar'}${order.whatsapp_status === 'ERROR' && order.whatsapp_error ? `<br><strong>${esc(order.whatsapp_error)}</strong>` : ''}</p>` : ''}${order.rejection_reason ? `<p>Motivo: ${esc(order.rejection_reason)}</p>` : ''}${admin ? `<div class="order-actions">${order.status === 'PENDIENTE' ? `<button class="primary" data-decision="APROBADO" data-id="${order.id}">Aprobar pedido</button><button class="danger" data-decision="RECHAZADO" data-id="${order.id}">Rechazar</button>` : ''}${active ? `<button class="secondary" data-cancel-order="${order.id}">Cancelar pedido</button>` : ''}<button class="danger" data-delete-order="${order.id}">Eliminar pedido</button></div>` : ''}</article>`;
+  const opening = shipped ? `<details class="order-card order-card--shipped" id="order-${order.id}">` : `<article class="order-card ${status === 'approved' ? 'order-card--approved' : ''}" id="order-${order.id}">`;
+  const title = `Pedido #${order.id}${admin ? ` · ${esc(order.name)}` : ''}`;
+  const subtitle = `${new Date(order.created_at).toLocaleString('es-CO')}${admin ? ` · ${esc(order.phone)}` : ''}`;
+  const header = shipped
+    ? `<summary class="order-top"><span class="order-title-block"><strong class="order-title">${title}</strong><small>${subtitle}</small></span><span class="pill shipped">${esc(statusLabel)}</span></summary>`
+    : `<div class="order-top"><div><h3>${title}</h3><p>${subtitle}</p></div><span class="pill ${status}">${esc(statusLabel)}</span></div>`;
+  const products = orderProductsHtml(order.items);
+  const pickup = order.pickup_date ? `<p class="pickup-summary">Recogida: ${esc(String(order.pickup_date).slice(0,10))} · ${String(order.pickup_hour).padStart(2,'0')}:00</p>` : '';
+  const price = `<p class="order-price"><strong>Valor total: ${format(order.total)}</strong>${order.notes ? ` · ${esc(order.notes)}` : ''}</p>`;
+  const whatsapp = admin && order.whatsapp_status ? `<p class="notice-status">Aviso WhatsApp: ${order.whatsapp_status === 'SOLICITADO' ? 'aceptado por Meta' : order.whatsapp_status === 'ERROR' ? 'falló; se reintentará' : order.whatsapp_status === 'CANCELADO' ? 'cancelado' : automaticWhatsApp ? 'en proceso' : 'pendiente de configurar'}${order.whatsapp_status === 'ERROR' && order.whatsapp_error ? `<br><strong>${esc(order.whatsapp_error)}</strong>` : ''}</p>` : '';
+  const rejection = order.rejection_reason ? `<p>Motivo: ${esc(order.rejection_reason)}</p>` : '';
+  const actions = admin ? `<div class="order-actions">${order.status === 'PENDIENTE' ? `<button class="primary" data-decision="APROBADO" data-id="${order.id}">Aprobar pedido</button><button class="danger" data-decision="RECHAZADO" data-id="${order.id}">Rechazar</button>` : ''}${active ? `<button class="secondary" data-cancel-order="${order.id}">Cancelar pedido</button>` : ''}<button class="danger" data-delete-order="${order.id}">Eliminar pedido</button></div>` : '';
+  return `${opening}${header}<div class="order-card-content">${products}${pickup}${price}${whatsapp}${rejection}${actions}</div>${shipped ? '</details>' : '</article>'}`;
 }
 function renderCustomers(customers) {
   adminCustomers = customers;
@@ -186,6 +212,7 @@ function renderAdminOrders(orders) {
   const container = $('admin-orders');
   const previousGroups = [...container.querySelectorAll('.order-day')];
   const openDays = new Set(previousGroups.filter(group => group.open).map(group => group.dataset.day));
+  const openShipped = new Set([...container.querySelectorAll('details.order-card--shipped[open]')].map(card => card.id));
   const grouped = new Map();
   for (const order of orders) {
     const day = order.pickup_date ? String(order.pickup_date).slice(0,10) : 'Sin fecha';
@@ -205,8 +232,9 @@ function renderAdminOrders(orders) {
     return `<details class="order-day" data-day="${esc(day)}" ${open ? 'open' : ''}><summary><span>${esc(label)}</span><span class="day-count">${dayOrders.length} pedido${dayOrders.length === 1 ? '' : 's'}${pending ? ` · ${pending} pendiente${pending === 1 ? '' : 's'}` : ''}</span></summary><div class="orders">${dayOrders.map(order => orderHtml(order,true)).join('')}</div></details>`;
   }).join('') || '<p>Aún no hay pedidos.</p>';
   for (const order of orders) {
-    const card = document.getElementById(`order-${order.id}`);
+    const card = container.querySelector(`#order-${order.id}`);
     if (!card) continue;
+    if (card.matches('details.order-card--shipped') && (openShipped.has(card.id) || String(order.id) === target)) card.open = true;
     if (Number(order.revision) > 1) card.insertAdjacentHTML('beforeend', `<p class="pickup-summary">Pedido actualizado ${Number(order.revision) - 1} ${Number(order.revision) === 2 ? 'vez' : 'veces'} · ${new Date(order.updated_at).toLocaleString('es-CO')}</p>`);
     if (order.status === 'APROBADO') card.insertAdjacentHTML('beforeend', `<div class="order-actions"><button class="primary" type="button" data-dispatch-order="${order.id}">Despachar pedido</button><button class="secondary" type="button" data-toggle-modifications="${order.id}" data-locked="${order.modifications_locked ? 'true' : 'false'}">${order.modifications_locked ? 'Permitir más productos' : 'Cerrar modificaciones'}</button></div>${order.modifications_locked ? '<p class="pickup-summary">En preparación: el cliente no puede agregar productos.</p>' : ''}`);
     if (['DESPACHADO', 'DESPACHADO_MANUAL'].includes(order.status)) { card.querySelector('[data-delete-order]')?.remove(); card.insertAdjacentHTML('beforeend', `<p class="pickup-summary">Pedido terminado.</p>${order.status === 'DESPACHADO_MANUAL' ? `<div class="order-actions"><button class="secondary" type="button" data-undo-dispatch="${order.id}">Reabrir pedido</button></div>` : ''}`); }
@@ -225,7 +253,7 @@ async function loadAdmin() {
   $('pending-count').textContent = data.orders.length;
   renderAdminOrders(data.orders);
   const target = new URLSearchParams(location.search).get('pedido');
-  if (target && /^\d+$/.test(target)) { const card = document.getElementById(`order-${target}`); if (card) { card.classList.add('highlighted-order'); if (!loadAdmin.highlighted) { card.scrollIntoView({ behavior:'smooth', block:'center' }); loadAdmin.highlighted = true; } } }
+  if (target && /^\d+$/.test(target)) { const card = $('admin-orders').querySelector(`#order-${target}`); if (card) { card.classList.add('highlighted-order'); if (!loadAdmin.highlighted) { card.scrollIntoView({ behavior:'smooth', block:'center' }); loadAdmin.highlighted = true; } } }
   const newestId = data.orders.reduce((max, order) => Math.max(max, Number(order.id)), 0);
   if (lastOrderId !== null && newestId > lastOrderId) { toast('Llegó un pedido nuevo.'); if (Notification.permission === 'granted') new Notification('Prestige Roses', { body: 'Llegó un pedido nuevo aprobado automáticamente.' }); }
   lastOrderId = newestId;
