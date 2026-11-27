@@ -18,7 +18,7 @@ function buildInventoryOverview(root, reservations, grades, assortedColor) {
   }
   return [...cells.values()].filter(cell => cell.real || cell.pending || cell.approved || cell.dispatched).map(cell => ({
     ...cell, available: Math.max(0, cell.real - cell.pending - cell.approved - cell.dispatched),
-    shortage: Math.max(0, cell.pending + cell.approved + cell.dispatched - cell.real)
+    shortage: Math.max(0, cell.pending + cell.approved - cell.real)
   }));
 }
 

@@ -27,12 +27,25 @@ test('muestra inventario real, reservas por pedido y faltante sin duplicar color
   });
 });
 
-test('un despacho manual sigue descontado de la disponibilidad del portal', () => {
+test('los despachos manuales no producen una alerta falsa ni aumentan la disponibilidad', () => {
   const root = [{ color: 'ROJOS', grades: { NACIONAL: { bunches: 5 } } }];
-  const reservations = [{ order_id: 42, name: 'Rita', status: 'DESPACHADO_MANUAL', color: 'ROJOS', grade: 'NACIONAL', bunches: 3 }];
+  const reservations = [
+    { order_id: 42, name: 'Rita', status: 'DESPACHADO_MANUAL', color: 'ROJOS', grade: 'NACIONAL', bunches: 3 },
+    { order_id: 43, name: 'Anibal', status: 'APROBADO', color: 'ROJOS', grade: 'NACIONAL', bunches: 5 }
+  ];
   const [cell] = buildInventoryOverview(root, reservations, ['NACIONAL'], 'COLORES SURTIDOS');
-  assert.equal(cell.real, 5);
   assert.equal(cell.dispatched, 3);
-  assert.equal(cell.available, 2);
-  assert.equal(cell.orders[0].status, 'DESPACHADO_MANUAL');
+  assert.equal(cell.approved, 5);
+  assert.equal(cell.available, 0);
+  assert.equal(cell.shortage, 0);
+});
+
+test('la alerta permanece si los pedidos activos superan el inventario real', () => {
+  const root = [{ color: 'ROJOS', grades: { NACIONAL: { bunches: 5 } } }];
+  const reservations = [
+    { order_id: 42, name: 'Rita', status: 'DESPACHADO_MANUAL', color: 'ROJOS', grade: 'NACIONAL', bunches: 3 },
+    { order_id: 43, name: 'Anibal', status: 'APROBADO', color: 'ROJOS', grade: 'NACIONAL', bunches: 6 }
+  ];
+  const [cell] = buildInventoryOverview(root, reservations, ['NACIONAL'], 'COLORES SURTIDOS');
+  assert.equal(cell.shortage, 1);
 });
