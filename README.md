@@ -11,6 +11,7 @@ Aplicación web para controlar salidas nacionales de flor. Consulta existencias 
 - Selectores de fecha y grado sincronizados entre Resumen e Inventario.
 - Creación completa en un solo paso con cliente, variedades, grados, precios y observaciones.
 - Lista de precios independiente por variedad y grado, con precios generales o especiales por cliente.
+- Para el cliente **PRESTIGIO PERSONAL** (usuario del portal **PRESTIGE**), Nacional bonchado se calcula a COP 5.000 por ramo. Al finalizar una remisión se crea en Lista de precios cualquier entrada faltante de ese cliente y variedad: primero se toma el precio general configurado y, si no existe, los valores base Nacional COP 10.500, Bajas COP 12.000, Nacional granel COP 7.500, Bajas granel COP 9.500 y Eucalipto COP 700. Los precios especiales ya configurados para otros clientes se conservan. Exportación requiere un precio configurado.
 - Validación de existencias, generación del documento y descuento de inventario en una sola transacción.
 - Toda la flor queda disponible inmediatamente, incluida la recibida el mismo día.
 - Cálculo automático de tallos usando la cantidad de tallos por ramo registrada en el inventario.

@@ -39,6 +39,9 @@ const initialData = () => ({
 });
 
 const generalPriceKey = '__GENERAL__';
+const defaultPriceByGrade = { NACIONAL: 10500, BAJAS: 12000, 'NACIONAL GRANEL': 7500, 'BAJAS GRANEL': 9500, HOJA: 700 };
+const prestigePrice = 5000;
+const prestigeClientKeys = new Set(['PRESTIGE', 'PRESTIGIO PERSONAL']);
 
 function normalizedText(value) {
   return String(value || '').trim().replace(/\s+/g, ' ').toUpperCase();
@@ -103,6 +106,15 @@ async function init() {
       memory = initialData();
       persistMemory();
     }
+    let corrected = false;
+    for (const row of memory.priceLists) {
+      if (prestigeClientKeys.has(normalizedText(row.clientName)) && row.gradeCm === 'NACIONAL' && Number(row.pricePerBunch) !== prestigePrice) {
+        row.pricePerBunch = prestigePrice;
+        row.updatedAt = new Date().toISOString();
+        corrected = true;
+      }
+    }
+    if (corrected) persistMemory();
     return;
   }
 
@@ -284,6 +296,8 @@ async function init() {
     CREATE INDEX IF NOT EXISTS idx_inventory_adjustments_source ON inventory_adjustments(source_date,variety,grade_cm,stems_per_bunch);
     CREATE INDEX IF NOT EXISTS idx_inventory_waste_source ON inventory_waste(source_date,variety,grade_cm,stems_per_bunch);
   `);
+
+  await pool.query("UPDATE price_lists SET price_per_bunch=$1,updated_at=NOW() WHERE client_key=ANY($2::text[]) AND grade_cm='NACIONAL' AND price_per_bunch<>$1", [prestigePrice, [...prestigeClientKeys]]);
 
   const countResult = await pool.query('SELECT COUNT(*)::int AS count FROM inventory');
   const shouldSeedDemo = process.env.SEED_DEMO_DATA === 'true';
@@ -698,6 +712,7 @@ async function listPriceLists() {
 
 async function savePriceList(input) {
   const clean = cleanPriceInput(input);
+  if (prestigeClientKeys.has(clean.clientKey) && clean.gradeCm === 'NACIONAL') clean.pricePerBunch = prestigePrice;
   if (!usePostgres) {
     const existing = memory.priceLists.find(row => row.clientKey === clean.clientKey && normalizedText(row.variety) === normalizedText(clean.variety) && row.gradeCm === clean.gradeCm);
     const now = new Date().toISOString();
@@ -733,8 +748,53 @@ async function deletePriceList(id) {
 
 function resolveMemoryPrice(clientName, variety, gradeCm) {
   const clientKey = normalizedText(clientName);
+  if (prestigeClientKeys.has(clientKey) && gradeCm === 'NACIONAL') return { pricePerBunch: prestigePrice };
   return memory.priceLists.find(row => row.clientKey === clientKey && normalizedText(row.variety) === normalizedText(variety) && row.gradeCm === gradeCm)
-    || memory.priceLists.find(row => row.clientKey === generalPriceKey && normalizedText(row.variety) === normalizedText(variety) && row.gradeCm === gradeCm);
+    || memory.priceLists.find(row => row.clientKey === generalPriceKey && normalizedText(row.variety) === normalizedText(variety) && row.gradeCm === gradeCm)
+    || (defaultPriceByGrade[gradeCm] ? { pricePerBunch: defaultPriceByGrade[gradeCm] } : null);
+}
+
+async function ensureMemoryPrice(clientName, variety, gradeCm) {
+  const price = resolveMemoryPrice(clientName, variety, gradeCm);
+  if (!price) return null;
+  const key = normalizedText(clientName);
+  const existing = memory.priceLists.find(row => row.clientKey === key && normalizedText(row.variety) === normalizedText(variety) && row.gradeCm === gradeCm);
+  if (existing) {
+    if (prestigeClientKeys.has(key) && gradeCm === 'NACIONAL' && Number(existing.pricePerBunch) !== prestigePrice) {
+      existing.pricePerBunch = prestigePrice;
+      existing.updatedAt = new Date().toISOString();
+      persistMemory();
+    }
+    return price;
+  }
+  await savePriceList({ clientName, variety, gradeCm, pricePerBunch: Number(price.pricePerBunch) });
+  return price;
+}
+
+async function ensurePostgresPrice(connection, clientName, variety, gradeCm) {
+  const key = normalizedText(clientName);
+  const special = prestigeClientKeys.has(key) && gradeCm === 'NACIONAL';
+  const result = await connection.query(
+    `SELECT id,client_key,price_per_bunch FROM price_lists
+     WHERE UPPER(TRIM(variety))=UPPER(TRIM($1)) AND grade_cm=$2 AND client_key = ANY($3::text[])
+     ORDER BY CASE WHEN client_key=$4 THEN 0 ELSE 1 END LIMIT 1`,
+    [variety, gradeCm, [key, generalPriceKey], key]
+  );
+  const price = special ? prestigePrice : Number(result.rows[0]?.price_per_bunch ?? defaultPriceByGrade[gradeCm]);
+  if (!Number.isFinite(price) || price <= 0) return null;
+  if (result.rows[0]?.client_key === key) {
+    if (special && Number(result.rows[0].price_per_bunch) !== prestigePrice) {
+      await connection.query('UPDATE price_lists SET price_per_bunch=$1,updated_at=NOW() WHERE id=$2', [prestigePrice, result.rows[0].id]);
+    }
+    return price;
+  }
+  await connection.query(
+    `INSERT INTO price_lists (client_name,client_key,variety,grade_cm,price_per_bunch)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (client_key,variety,grade_cm) DO ${special ? 'UPDATE SET price_per_bunch=EXCLUDED.price_per_bunch,updated_at=NOW()' : 'NOTHING'}`,
+    [clientName, key, variety, gradeCm, price]
+  );
+  return price;
 }
 
 function cleanVarietyItems(input) {
@@ -813,12 +873,13 @@ async function createRemission(input) {
       if (!stock || totalRequested > stock.bunches) throw new Error(`Stock insuficiente de ${decoded.variety}.`);
       return { stock, requested, decoded };
     });
-    const detailRows = selected.map(({ requested, decoded }, index) => {
+    const detailRows = [];
+    for (const [index, { requested, decoded }] of selected.entries()) {
       const saleGrade = decoded.gradeCm;
-      const price = resolveMemoryPrice(details.clientName, decoded.variety, saleGrade);
+      const price = requested.isDonation ? null : await ensureMemoryPrice(details.clientName, decoded.variety, saleGrade);
       if (!requested.isDonation && !price) throw new Error(`No hay precio configurado para ${decoded.variety} · ${saleGrade}. Regístrelo en Lista de precios.`);
       const unitPriceBunch = requested.isDonation ? 0 : Number(price.pricePerBunch);
-      return {
+      detailRows.push({
         id: index + 1, inventoryId: null, variety: decoded.variety, sourceDate: decoded.sourceDate,
         gradeCm: saleGrade, sourceGradeCm: decoded.gradeCm, stemsPerBunch: decoded.stemsPerBunch, bunches: requested.bunches,
         stems: requested.type === 'eucalyptus' ? requested.stems : requested.bunches * decoded.stemsPerBunch,
@@ -826,8 +887,8 @@ async function createRemission(input) {
         unitPriceStem: requested.type === 'eucalyptus' ? unitPriceBunch : 0,
         subtotal: requested.type === 'eucalyptus' ? requested.stems * unitPriceBunch : requested.bunches * unitPriceBunch,
         isDonation: requested.isDonation
-      };
-    });
+      });
+    }
     const requestedBunches = detailRows.reduce((sum, row) => sum + row.bunches, 0);
     const requestedStems = detailRows.reduce((sum, row) => sum + row.stems, 0);
     const total = detailRows.reduce((sum, row) => sum + row.subtotal, 0);
@@ -869,14 +930,9 @@ async function createRemission(input) {
         if (requested.bunches > available) throw new Error(`Stock insuficiente de ${selected.variety}. Quedan ${Math.max(available, 0)} ramos.`);
         selectedInThisRemission.set(requested.key, (selectedInThisRemission.get(requested.key) || 0) + requested.bunches);
       }
-      const priceResult = await client.query(
-        `SELECT price_per_bunch FROM price_lists
-         WHERE UPPER(TRIM(variety))=UPPER(TRIM($1)) AND grade_cm=$2 AND client_key = ANY($3::text[])
-         ORDER BY CASE WHEN client_key=$4 THEN 0 ELSE 1 END LIMIT 1`,
-        [selected.variety, saleGrade, [normalizedText(details.clientName), generalPriceKey], normalizedText(details.clientName)]
-      );
-      if (!requested.isDonation && !priceResult.rows[0]) throw new Error(`No hay precio configurado para ${selected.variety} · ${saleGrade}. Regístrelo en Lista de precios.`);
-      const unitPriceBunch = requested.isDonation ? 0 : Number(priceResult.rows[0].price_per_bunch);
+      const price = requested.isDonation ? null : await ensurePostgresPrice(client, details.clientName, selected.variety, saleGrade);
+      if (!requested.isDonation && !price) throw new Error(`No hay precio configurado para ${selected.variety} · ${saleGrade}. Regístrelo en Lista de precios.`);
+      const unitPriceBunch = requested.isDonation ? 0 : price;
       const stems = requested.type === 'eucalyptus' ? requested.stems : requested.bunches * selected.stemsPerBunch;
       detailRows.push({ ...selected, gradeCm: saleGrade, sourceGradeCm: requested.type === 'eucalyptus' || requested.type === 'export' ? null : selected.gradeCm, bunches: requested.bunches, stems, unitPriceBunch: requested.type === 'eucalyptus' ? 0 : unitPriceBunch, unitPriceStem: requested.type === 'eucalyptus' ? unitPriceBunch : 0, subtotal: (requested.type === 'eucalyptus' ? stems : requested.bunches) * unitPriceBunch, isDonation: requested.isDonation });
     }

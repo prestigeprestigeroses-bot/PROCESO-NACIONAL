@@ -88,8 +88,8 @@ async function prices(connection = pool, customerId = null) {
   const { rows } = await connection.query('SELECT grade, price_per_bunch FROM portal_prices ORDER BY grade');
   const result = Object.fromEntries(rows.map(row => [row.grade, Number(row.price_per_bunch)]));
   if (customerId === null) return result;
-  const customer = await connection.query('SELECT name FROM portal_customers WHERE id=$1', [customerId]);
-  return customerPrices(result, customer.rows[0]?.name);
+  const customer = await connection.query('SELECT name,login_identifier FROM portal_customers WHERE id=$1', [customerId]);
+  return customerPrices(result, customer.rows[0]?.name, customer.rows[0]?.login_identifier);
 }
 function summarize(lots) {
   const result = Object.fromEntries(colors.map(color => [color, { color, grades: Object.fromEntries(grades.map(grade => [grade, { bunches: 0, stems: 0 }])) }]));

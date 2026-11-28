@@ -4,7 +4,7 @@ const { customerPrices, planAdditions } = require('./order-amendment');
 
 test('PRESTIGE paga 5.000 por Nacional y los demás clientes conservan su precio', () => {
   const general = { NACIONAL: 10500, BAJAS: 12000 };
-  const prestige = customerPrices(general, ' prestige ');
+  const prestige = customerPrices(general, 'PRESTIGIO PERSONAL', ' prestige ');
   const other = customerPrices(general, 'OTRO CLIENTE');
   assert.equal(prestige.NACIONAL, 5000);
   assert.equal(prestige.BAJAS, 12000);

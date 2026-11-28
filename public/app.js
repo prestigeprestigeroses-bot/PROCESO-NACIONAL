@@ -409,11 +409,14 @@ function clientKey(value) {
   return String(value || '').trim().replace(/\s+/g, ' ').toUpperCase();
 }
 
+const defaultPriceByGrade = { NACIONAL: 10500, BAJAS: 12000, 'NACIONAL GRANEL': 7500, 'BAJAS GRANEL': 9500, HOJA: 700 };
 function selectedPrice(clientName, variety, gradeCm) {
   const prices = Array.isArray(state.prices) ? state.prices : [];
   const client = clientKey(clientName);
+  if (['PRESTIGE', 'PRESTIGIO PERSONAL'].includes(client) && gradeCm === 'NACIONAL') return { pricePerBunch: 5000 };
   return prices.find(row => client && clientKey(row.clientName) === client && clientKey(row.variety) === clientKey(variety) && row.gradeCm === gradeCm)
-    || prices.find(row => !row.clientName && clientKey(row.variety) === clientKey(variety) && row.gradeCm === gradeCm);
+    || prices.find(row => !row.clientName && clientKey(row.variety) === clientKey(variety) && row.gradeCm === gradeCm)
+    || (defaultPriceByGrade[gradeCm] ? { pricePerBunch: defaultPriceByGrade[gradeCm] } : null);
 }
 
 function renderPrices() {

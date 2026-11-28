@@ -1,6 +1,7 @@
-function customerPrices(basePrices, customerName) {
+function customerPrices(basePrices, customerName, loginIdentifier) {
   const name = String(customerName || '').trim().replace(/\s+/g, ' ').toUpperCase();
-  return name === 'PRESTIGE' ? { ...basePrices, NACIONAL: 5000 } : basePrices;
+  const user = String(loginIdentifier || '').trim().toUpperCase();
+  return user === 'PRESTIGE' || name === 'PRESTIGE' ? { ...basePrices, NACIONAL: 5000 } : basePrices;
 }
 
 function planAdditions(requested, previousItems, prices) {
