@@ -11,6 +11,7 @@ const { allocateReservations, applyReservations } = require('./reservations');
 const { planAdditions } = require('./order-amendment');
 const { buildInventoryOverview } = require('./inventory-overview');
 const { colorGroups, colorOf } = require('./colors');
+const { customerPrices } = require('./pricing');
 const whatsapp = require('./whatsapp');
 
 if (!process.env.DATABASE_URL) throw new Error('Configure DATABASE_URL en las variables del servicio o en portal-clientes/.env');
@@ -84,7 +85,13 @@ function auth(role) { return async (req, res, next) => {
 }; }
 function setSession(res, value) { res.setHeader('Set-Cookie', `portal_session=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`); }
 function fail(res, error, code = 400) { res.status(code).json({ error: error.message || String(error) }); }
-async function prices() { const { rows } = await pool.query('SELECT grade, price_per_bunch FROM portal_prices ORDER BY grade'); return Object.fromEntries(rows.map(row => [row.grade, Number(row.price_per_bunch)])); }
+async function prices(connection = pool, customerId = null) {
+  const { rows } = await connection.query('SELECT grade, price_per_bunch FROM portal_prices ORDER BY grade');
+  const result = Object.fromEntries(rows.map(row => [row.grade, Number(row.price_per_bunch)]));
+  if (customerId === null) return result;
+  const customer = await connection.query('SELECT name FROM portal_customers WHERE id=$1', [customerId]);
+  return customerPrices(result, customer.rows[0]?.name);
+}
 function summarize(lots) {
   const result = Object.fromEntries(colors.map(color => [color, { color, grades: Object.fromEntries(grades.map(grade => [grade, { bunches: 0, stems: 0 }])) }]));
   for (const lot of lots) {
@@ -247,13 +254,9 @@ async function init() {
   await pool.query('ALTER TABLE portal_customer_notifications ADD COLUMN IF NOT EXISTS order_revision INTEGER NOT NULL DEFAULT 1');
   await pool.query('ALTER TABLE portal_customers ADD COLUMN IF NOT EXISTS login_identifier VARCHAR(30)');
   await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS portal_customers_login_identifier_unique ON portal_customers (LOWER(login_identifier)) WHERE login_identifier IS NOT NULL');
-  const count = await pool.query('SELECT COUNT(*)::int AS n FROM portal_prices');
-  if (!count.rows[0].n) {
-    for (const [grade, price] of [['NACIONAL', 10000], ['BAJAS', 12000], ['NACIONAL GRANEL', 8000], ['BAJAS GRANEL', 7000]]) {
-      await pool.query('INSERT INTO portal_prices(grade,price_per_bunch) VALUES($1,$2) ON CONFLICT DO NOTHING', [grade, price]);
-    }
+  for (const [grade, price] of [['NACIONAL', 10500], ['BAJAS', 12000], ['NACIONAL GRANEL', 7500], ['BAJAS GRANEL', 9500], ['EUCALIPTO', 700]]) {
+    await pool.query('INSERT INTO portal_prices(grade,price_per_bunch) VALUES($1,$2) ON CONFLICT DO NOTHING', [grade, price]);
   }
-  await pool.query("INSERT INTO portal_prices(grade,price_per_bunch) VALUES('EUCALIPTO',1000) ON CONFLICT DO NOTHING");
 }
 app.get('/api/session', async (req, res) => {
   try { const s = session(req); if (!s) return res.json({ role: null }); if (s.role === 'admin') return res.json({ role: 'admin' }); const { rows } = await pool.query('SELECT id,name FROM portal_customers WHERE id=$1 AND active=TRUE', [s.id]); res.json(rows[0] ? { role: 'customer', name: rows[0].name } : { role: null }); } catch (e) { fail(res, e, 500); }
@@ -279,7 +282,7 @@ app.post('/api/login', async (req, res) => {
   } catch (e) { fail(res, e, 401); }
 });
 app.post('/api/logout', (_req, res) => { res.setHeader('Set-Cookie', 'portal_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'); res.json({ ok: true }); });
-app.get('/api/catalog', auth('customer'), async (_req, res) => { try { res.json({ colors: await availability(), prices: await prices(), automaticWhatsApp: Boolean(whatsapp.customerConfig()) }); } catch (e) { fail(res, e, 500); } });
+app.get('/api/catalog', auth('customer'), async (req, res) => { try { res.json({ colors: await availability(), prices: await prices(pool, req.session.id), automaticWhatsApp: Boolean(whatsapp.customerConfig()) }); } catch (e) { fail(res, e, 500); } });
 app.get('/api/catalog/events', auth('customer'), (req, res) => {
   res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive' });
   res.flushHeaders();
@@ -309,7 +312,7 @@ app.post('/api/orders', auth('customer'), async (req, res) => {
     const { rows: matchingOrders } = await client.query("SELECT id,total,notes,pickup_hour,revision,modifications_locked FROM portal_orders WHERE customer_id=$1 AND pickup_date=$2::date AND status='APROBADO' ORDER BY id LIMIT 1 FOR UPDATE", [req.session.id, pickupDate]);
     const existing = matchingOrders[0] || null;
     if (existing?.modifications_locked) { const error = new Error(`El pedido #${existing.id} ya está en preparación. No se pueden agregar productos para ese día.`); error.code = 'ORDER_LOCKED'; throw error; }
-    const catalog = await availability(client); const p = await prices();
+    const catalog = await availability(client); const p = await prices(client, req.session.id);
     const requested = new Map();
     for (const item of items) {
       const color = norm(item.color), grade = norm(item.grade), bunches = Number(item.bunches);
