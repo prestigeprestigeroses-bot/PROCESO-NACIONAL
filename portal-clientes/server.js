@@ -8,10 +8,9 @@ const express = require('express');
 const { Pool } = require('pg');
 const { listInventory } = require('./inventory');
 const { allocateReservations, applyReservations } = require('./reservations');
-const { planAdditions } = require('./order-amendment');
+const { customerPrices, planAdditions } = require('./order-amendment');
 const { buildInventoryOverview } = require('./inventory-overview');
 const { colorGroups, colorOf } = require('./colors');
-const { customerPrices } = require('./pricing');
 const whatsapp = require('./whatsapp');
 
 if (!process.env.DATABASE_URL) throw new Error('Configure DATABASE_URL en las variables del servicio o en portal-clientes/.env');

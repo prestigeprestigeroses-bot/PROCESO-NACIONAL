@@ -1,3 +1,8 @@
+function customerPrices(basePrices, customerName) {
+  const name = String(customerName || '').trim().replace(/\s+/g, ' ').toUpperCase();
+  return name === 'PRESTIGE' ? { ...basePrices, NACIONAL: 5000 } : basePrices;
+}
+
 function planAdditions(requested, previousItems, prices) {
   const previousByKey = new Map(previousItems.map(item => [`${item.color}|${item.grade}`, item]));
   const additions = [...requested].map(([key, bunches]) => {
@@ -10,4 +15,4 @@ function planAdditions(requested, previousItems, prices) {
   return { additions, previousByKey, addedTotal };
 }
 
-module.exports = { planAdditions };
+module.exports = { customerPrices, planAdditions };
